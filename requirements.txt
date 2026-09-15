@@ -1,0 +1,2 @@
+# Fonte única das dependências em pyproject.toml. Ainda sem lock validado.
+-e .[dev]

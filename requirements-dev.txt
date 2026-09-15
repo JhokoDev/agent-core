@@ -1,0 +1,2 @@
+# Alias para instalação de desenvolvimento e testes.
+-r requirements.txt

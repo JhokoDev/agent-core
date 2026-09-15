@@ -1,0 +1,15 @@
+ollama serve &
+export AGENT_API_TOKEN="minhasenha_super_segura_de_32_caracteres_minimo_aqui"
+uvicorn "app.main:create_app" --factory --host 0.0.0.0 --port 8000
+
+
+
+
+
+
+
+
+
+
+
+uvicorn "app.main:create_app" --factory --host 0.0.0.0 --port 8000 --env-file .env
