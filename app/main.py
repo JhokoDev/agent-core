@@ -1,6 +1,7 @@
 import secrets
 import time
 import uuid
+import requests
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -10,7 +11,10 @@ from app.database import Database
 from app.logging import configure_logging
 from app.models.base import ModelProvider
 from app.models.registry import create_provider
+from pydantic import BaseModel
 
+class ChatRequest(BaseModel):
+    texto: str
 
 def create_app(settings: Settings | None = None, provider: ModelProvider | None = None) -> FastAPI:
     config = settings or Settings()
@@ -29,10 +33,12 @@ def create_app(settings: Settings | None = None, provider: ModelProvider | None 
                 handler.close()
                 app.state.audit.removeHandler(handler)
 
+    # 1. AQUI O "APP" É CRIADO
     app = FastAPI(title="Personal Agent — Fase 0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     bearer = HTTPBearer(auto_error=False)
 
+    # 2. AQUI O "AUTHORIZE" É CRIADO
     async def authorize(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
         if credentials is None or not secrets.compare_digest(
                 credentials.credentials.encode(), config.api_token.get_secret_value().encode()):
@@ -67,5 +73,27 @@ def create_app(settings: Settings | None = None, provider: ModelProvider | None 
             "database": "ready" if db_ok else "unavailable",
             "llm": model_health.model_dump(),
             "bridge": "not_implemented", "tools": "disabled"})
+
+    # 3. AGORA SIM! AQUI PODEMOS USAR O "APP" E O "AUTHORIZE"
+    @app.post("/chat", dependencies=[Depends(authorize)])
+    async def chat(requisicao: ChatRequest):
+        # Monta a pergunta para o Ollama
+        payload = {
+            "model": config.model,  # Usa o modelo definido no seu config.py
+            "messages": [{"role": "user", "content": requisicao.texto}],
+            "stream": False
+        }
+        
+        try:
+            # Envia para a IA local
+            res = requests.post(f"{config.ollama_url}/api/chat", json=payload, timeout=120)
+            res.raise_for_status()
+            
+            # Pega a resposta e devolve no formato que o Android (Moshi) espera
+            resposta_texto = res.json().get("message", {}).get("content", "Erro ao gerar texto.")
+            return {"resposta_ia": resposta_texto}
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Erro na IA: {e}")
 
     return app
