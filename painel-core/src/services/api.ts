@@ -314,7 +314,11 @@ export const api: HarveyApi = {
 
   capabilities: async () => {
     try {
-      const res = await fetch('/agentes');
+      const res = await fetch('/agentes', {
+        headers: {
+          Authorization: 'Bearer minhasenha_super_segura_de_32_caracteres_minimo_aqui',
+        },
+      });
       let skills: any[] = [];
       let tools: any[] = [];
       if (res.ok) {

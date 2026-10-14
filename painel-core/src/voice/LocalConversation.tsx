@@ -126,7 +126,11 @@ export default function LocalConversation({
   // Carrega lista de skills/agentes para seleção
   useEffect(() => {
     let alive = true;
-    fetch('/agentes')
+    fetch('/agentes', {
+      headers: {
+        Authorization: 'Bearer minhasenha_super_segura_de_32_caracteres_minimo_aqui',
+      },
+    })
       .then((res) => (res.ok ? res.json() : []))
       .then((data: AgenteOpt[]) => {
         if (alive) {
