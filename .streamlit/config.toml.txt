@@ -1,0 +1,10 @@
+[theme]
+base="dark"
+primaryColor="#00E676"      # Azul Ciano brilhante (estilo futurista/tecnológico)
+backgroundColor="#0D1117"   # Fundo escuro profundo (Padrão GitHub Dark)
+secondaryBackgroundColor="#161B22" # Fundo secundário para barras e inputs
+textColor="#E6EDF3"         # Texto cinza claro para não cansar a vista
+font="monospace"            # Troca a fonte padrão para estilo de código/terminal
+
+[client]
+toolbarMode="minimal"       # Esconde opções desnecessárias do Streamlit no canto superior

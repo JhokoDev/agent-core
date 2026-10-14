@@ -1,0 +1,5029 @@
+﻿import argparse
+import asyncio
+import json
+import sys
+from pydantic import ValidationError
+from app.core.config import Settings
+from app.infrastructure.database import Database
+from app.models.base import Message, ProviderError
+from app.models.registry import create_provider
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="PreparaÃ§Ã£o e diagnÃ³stico â€” Fase 0")
+    parser.add_argument("command", choices=["serve", "doctor", "smoke-model"])
+    args = parser.parse_args()
+    try:
+        settings = Settings()
+    except ValidationError:
+        print("ConfiguraÃ§Ã£o invÃ¡lida. Execute scripts/bootstrap.py e confira .env; valores omitidos por seguranÃ§a.", file=sys.stderr)
+        raise SystemExit(2)
+    if args.command == "serve":
+        import uvicorn
+        from app.main import create_app
+        uvicorn.run(create_app(settings), host=settings.host, port=settings.port, access_log=False)
+        return
+
+    async def check() -> int:
+        provider = create_provider(settings)
+        try:
+            health = await provider.health()
+            if args.command == "doctor":
+                db = Database(settings.database_path)
+                db.initialize()
+                db_ok = db.ready()
+                print(json.dumps({"database": "ready" if db_ok else "unavailable", "llm": health.model_dump()}, ensure_ascii=False))
+                return 0 if db_ok and health.status == "ready" else 1
+            if health.status != "ready":
+                print(json.dumps(health.model_dump()))
+                return 1
+            result = await provider.chat([Message(role="user", content="Responda em portuguÃªs, em uma frase: o que Ã© um computador?")])
+            # ExibiÃ§Ã£o direta solicitada pelo operador; nÃ£o grava conteÃºdo em logs.
+            print(result.content)
+            return 0
+        except ProviderError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        finally:
+            await provider.aclose()
+
+    raise SystemExit(asyncio.run(check()))
+
+
+if __name__ == "__main__":
+    main()
+import os
+import json
+import uuid
+from datetime import datetime
+from typing import Any
+
+from app.infrastructure import storage
+
+from app.ai.model_provider import criar_model_provider
+from app.ai.model_registry import (
+    criar_registry_padrao as criar_model_registry_padrao,
+)
+
+from app.planning.planner import Planner
+from app.routing.router import Router
+
+from app.tools.tool_registry import (
+    criar_registry_padrao as criar_tool_registry_padrao,
+)
+from app.tools.tool_permissions import ToolPermissionPolicy
+
+from app.memory.memory_store import MemoryStore
+from app.memory.memory_retrieval import MemoryRetriever
+
+from app.permissions.permission_context import PermissionContext
+from app.permissions.permission_context_registry import (
+    PermissionContextRegistry,
+)
+from app.permissions.permission_engine import PermissionEngine
+from app.permissions.permission_registry import PermissionRegistry
+from app.permissions.permission_service import PermissionService
+
+from app.tools.execution_guard import ExecutionGuard
+
+
+# ============================================================
+# CONFIGURAÃ‡ÃƒO
+# ============================================================
+
+OLLAMA_URL = os.getenv(
+    "OLLAMA_URL",
+    "http://localhost:11434/api/chat",
+)
+
+
+# ============================================================
+# TOOL SYSTEM
+# ============================================================
+
+TOOL_REGISTRY = criar_tool_registry_padrao()
+
+PERMISSION_POLICY = ToolPermissionPolicy()
+
+PERMISSION_REGISTRY = PermissionRegistry()
+
+PERMISSION_CONTEXT_REGISTRY = PermissionContextRegistry()
+
+PERMISSION_ENGINE = PermissionEngine(
+    policy=PERMISSION_POLICY,
+    registry=PERMISSION_REGISTRY,
+)
+
+PERMISSION_SERVICE = PermissionService(
+    engine=PERMISSION_ENGINE,
+    permission_registry=PERMISSION_REGISTRY,
+    context_registry=PERMISSION_CONTEXT_REGISTRY,
+)
+
+EXECUTION_GUARD = ExecutionGuard(
+    permission_service=PERMISSION_SERVICE,
+)
+
+
+# ============================================================
+# MODEL SYSTEM
+# ============================================================
+
+MODEL_REGISTRY = criar_model_registry_padrao()
+
+MODELO_PADRAO = os.getenv(
+    "AGENT_MODEL_PADRAO",
+    "llama3.2:1b",
+)
+
+ROUTER = Router(
+    model_registry=MODEL_REGISTRY,
+    modelo_simples=os.getenv(
+        "AGENT_MODEL_SIMPLES",
+        MODELO_PADRAO,
+    ),
+    modelo_codigo=os.getenv(
+        "AGENT_MODEL_CODIGO",
+        MODELO_PADRAO,
+    ),
+    modelo_complexo=os.getenv(
+        "AGENT_MODEL_COMPLEXO",
+        MODELO_PADRAO,
+    ),
+)
+
+MODEL_PROVIDER = criar_model_provider()
+
+
+# ============================================================
+# PLANNER
+# ============================================================
+
+PLANNER = Planner()
+
+
+# ============================================================
+# MEMORY + RAG
+# ============================================================
+
+MEMORY_STORE = MemoryStore()
+
+MEMORY_RETRIEVER = MemoryRetriever(
+    MEMORY_STORE,
+)
+
+
+# ============================================================
+# PERMISSÃ•ES DE SKILL
+# ============================================================
+
+def carregar_permissoes_skill(
+    contexto_id: str,
+    ferramentas_permitidas: list[str] | None,
+) -> None:
+    """
+    Carrega as permissÃµes de ferramentas associadas a uma Skill.
+    """
+
+    ferramentas = ferramentas_permitidas or []
+
+    contexto = PermissionContext(
+        id=contexto_id,
+        tipo="skill",
+    )
+
+    PERMISSION_CONTEXT_REGISTRY.registrar(
+        contexto,
+    )
+
+    PERMISSION_POLICY.carregar_skill(
+        contexto_id,
+        ferramentas,
+    )
+
+
+# ============================================================
+# FERRAMENTAS
+# ============================================================
+
+def obter_ferramentas_da_skill(
+    ferramentas_permitidas: list[str] | None,
+) -> list[dict]:
+    """
+    Retorna os schemas das ferramentas permitidas
+    no formato esperado pelo Ollama.
+    """
+
+    ferramentas = ferramentas_permitidas or []
+
+    return TOOL_REGISTRY.gerar_schemas_ollama(
+        ferramentas,
+    )
+
+
+def executar_ferramenta_autorizada(
+    contexto_id: str,
+    ferramenta_id: str,
+    argumentos: dict[str, Any],
+) -> Any:
+    """
+    Executa uma ferramenta passando pelo ExecutionGuard.
+    """
+
+    ferramenta = TOOL_REGISTRY.obter(
+        ferramenta_id,
+    )
+
+    if ferramenta is None:
+        raise ValueError(
+            f"Ferramenta '{ferramenta_id}' nÃ£o encontrada."
+        )
+
+    return EXECUTION_GUARD.executar(
+        contexto_id=contexto_id,
+        ferramenta=ferramenta,
+        argumentos=argumentos,
+    )
+
+
+# ============================================================
+# MEMORY
+# ============================================================
+
+def salvar_memoria(
+    conteudo: str,
+    tipo: str = "fato",
+    metadata: dict[str, Any] | None = None,
+) -> Any:
+    """
+    Salva uma memÃ³ria no MemoryStore.
+    """
+
+    return MEMORY_STORE.salvar(
+        conteudo=conteudo,
+        tipo=tipo,
+        metadata=metadata or {},
+    )
+
+
+def recuperar_memorias(
+    consulta: str,
+    limite: int = 5,
+) -> list[Any]:
+    """
+    Recupera memÃ³rias relevantes para uma consulta.
+    """
+
+    return MEMORY_RETRIEVER.buscar(
+        consulta,
+        limite=limite,
+    )
+
+
+# ============================================================
+# CONTEXTO
+# ============================================================
+
+def preparar_contexto_limpo(
+    mensagens: list[dict],
+    limite: int = 20,
+) -> list[dict]:
+    """
+    MantÃ©m apenas mensagens vÃ¡lidas e limita o tamanho
+    do histÃ³rico enviado ao modelo.
+    """
+
+    contexto: list[dict] = []
+
+    for mensagem in mensagens[-limite:]:
+        if not isinstance(mensagem, dict):
+            continue
+
+        role = mensagem.get("role")
+        content = mensagem.get("content")
+
+        if role not in {
+            "system",
+            "user",
+            "assistant",
+            "tool",
+        }:
+            continue
+
+        if not isinstance(content, str):
+            continue
+
+        if not content.strip():
+            continue
+
+        contexto.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+
+    return contexto
+
+
+# ============================================================
+# PLANO
+# ============================================================
+
+def serializar_plano(plano: Any) -> dict | None:
+    """
+    Converte um PlannerContract em um dicionÃ¡rio serializÃ¡vel.
+    """
+
+    if plano is None:
+        return None
+
+    if hasattr(plano, "model_dump"):
+        return plano.model_dump()
+
+    if hasattr(plano, "__dict__"):
+        resultado = {}
+
+        for chave, valor in plano.__dict__.items():
+            if hasattr(valor, "__dict__"):
+                resultado[chave] = valor.__dict__
+
+            elif isinstance(valor, list):
+                resultado[chave] = [
+                    item.__dict__
+                    if hasattr(item, "__dict__")
+                    else item
+                    for item in valor
+                ]
+
+            else:
+                resultado[chave] = valor
+
+        return resultado
+
+    return None
+
+
+# ============================================================
+# CHAT
+# ============================================================
+
+def _obter_chat(
+    chat_id: str | None,
+) -> dict:
+    """
+    ObtÃ©m um chat existente ou cria um novo.
+    """
+
+    if chat_id:
+        chat = storage.obter_chat(
+            chat_id,
+        )
+
+        if chat is not None:
+            return chat
+
+    novo_chat = {
+        "id": chat_id or str(uuid.uuid4()),
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "messages": [],
+    }
+
+    storage.salvar_chat(
+        novo_chat,
+    )
+
+    return novo_chat
+
+
+# ============================================================
+# PROCESSAMENTO PRINCIPAL
+# ============================================================
+
+def processar_mensagem_ia_stream(
+    mensagem: str,
+    chat_id: str | None = None,
+    skill: dict | None = None,
+    imagem_base64: str | None = None,
+):
+    """
+    Processa uma mensagem utilizando:
+
+    Router
+    â†’ Model Registry
+    â†’ Memory
+    â†’ Planner
+    â†’ Tool Registry
+    â†’ Permission System
+    â†’ Model Provider
+    """
+
+    chat = _obter_chat(
+        chat_id,
+    )
+
+    chat_id = chat["id"]
+
+    mensagens_chat = chat.get(
+        "messages",
+        [],
+    )
+
+    # --------------------------------------------------------
+    # SKILL
+    # --------------------------------------------------------
+
+    skill_id = None
+    skill_prompt = None
+    ferramentas_permitidas: list[str] = []
+
+    if skill:
+        skill_id = skill.get(
+            "id",
+        )
+
+        skill_prompt = skill.get(
+            "prompt",
+            skill.get("system_prompt"),
+        )
+
+        ferramentas_permitidas = skill.get(
+            "ferramentas_permitidas",
+            skill.get("tools", []),
+        ) or []
+
+    # --------------------------------------------------------
+    # CONTEXTO DE PERMISSÃ•ES
+    # --------------------------------------------------------
+
+    contexto_id = f"chat:{chat_id}"
+
+    carregar_permissoes_skill(
+        contexto_id,
+        ferramentas_permitidas,
+    )
+
+    # --------------------------------------------------------
+    # MENSAGEM DO USUÃRIO
+    # --------------------------------------------------------
+
+    conteudo_usuario = mensagem
+
+    if imagem_base64:
+        conteudo_usuario = (
+            f"{mensagem}\n\n"
+            "[Imagem anexada em Base64]"
+        )
+
+    mensagem_usuario = {
+        "role": "user",
+        "content": conteudo_usuario,
+    }
+
+    mensagens_chat.append(
+        mensagem_usuario,
+    )
+
+    # --------------------------------------------------------
+    # ROUTER
+    # --------------------------------------------------------
+
+    rota = ROUTER.rotear(
+        mensagem,
+    )
+
+    modelo = rota.modelo
+
+    # --------------------------------------------------------
+    # MEMORY
+    # --------------------------------------------------------
+
+    memorias = recuperar_memorias(
+        mensagem,
+        limite=5,
+    )
+
+    memoria_contexto = ""
+
+    if memorias:
+        linhas_memoria = []
+
+        for memoria in memorias:
+            if isinstance(memoria, dict):
+                conteudo = memoria.get(
+                    "conteudo",
+                    memoria.get("content", ""),
+                )
+            else:
+                conteudo = getattr(
+                    memoria,
+                    "conteudo",
+                    getattr(
+                        memoria,
+                        "content",
+                        "",
+                    ),
+                )
+
+            if conteudo:
+                linhas_memoria.append(
+                    f"- {conteudo}"
+                )
+
+        if linhas_memoria:
+            memoria_contexto = (
+                "MemÃ³rias relevantes:\n"
+                + "\n".join(linhas_memoria)
+            )
+
+    # --------------------------------------------------------
+    # PLANNER
+    # --------------------------------------------------------
+
+    plano = None
+
+    if rota.rota == "complexo":
+        try:
+            plano = PLANNER.criar_plano(
+                mensagem,
+            )
+        except Exception:
+            plano = None
+
+    # --------------------------------------------------------
+    # SYSTEM PROMPT
+    # --------------------------------------------------------
+
+    mensagens_modelo: list[dict] = []
+
+    system_parts = [
+        "VocÃª Ã© o Agent Core, um assistente pessoal generalista.",
+        "Responda de forma objetiva, precisa e Ãºtil.",
+    ]
+
+    if skill_prompt:
+        system_parts.append(
+            f"\nInstruÃ§Ãµes da Skill:\n{skill_prompt}"
+        )
+
+    if memoria_contexto:
+        system_parts.append(
+            f"\n{memoria_contexto}"
+        )
+
+    if plano:
+        plano_serializado = serializar_plano(
+            plano,
+        )
+
+        if plano_serializado:
+            system_parts.append(
+                "\nPlano de execuÃ§Ã£o:\n"
+                + json.dumps(
+                    plano_serializado,
+                    ensure_ascii=False,
+                )
+            )
+
+    mensagens_modelo.append(
+        {
+            "role": "system",
+            "content": "\n".join(system_parts),
+        }
+    )
+
+    # --------------------------------------------------------
+    # HISTÃ“RICO
+    # --------------------------------------------------------
+
+    mensagens_modelo.extend(
+        preparar_contexto_limpo(
+            mensagens_chat,
+        )
+    )
+
+    # --------------------------------------------------------
+    # TOOLS
+    # --------------------------------------------------------
+
+    ferramentas = obter_ferramentas_da_skill(
+        ferramentas_permitidas,
+    )
+
+    # --------------------------------------------------------
+    # PRIMEIRA CHAMADA AO MODELO
+    # --------------------------------------------------------
+
+    resposta_modelo = MODEL_PROVIDER.gerar(
+        modelo=modelo,
+        mensagens=mensagens_modelo,
+        temperatura=0.5,
+        ferramentas=ferramentas or None,
+    )
+
+    # --------------------------------------------------------
+    # PROCESSAMENTO DE TOOL CALLS
+    # --------------------------------------------------------
+
+    tool_calls = []
+
+    mensagem_resposta = resposta_modelo.get(
+        "message",
+        {},
+    )
+
+    if isinstance(mensagem_resposta, dict):
+        tool_calls = mensagem_resposta.get(
+            "tool_calls",
+            [],
+        ) or []
+
+    resultados_tools = []
+
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+
+        function_data = tool_call.get(
+            "function",
+            {},
+        )
+
+        if not isinstance(function_data, dict):
+            continue
+
+        ferramenta_id = function_data.get(
+            "name",
+        )
+
+        argumentos = function_data.get(
+            "arguments",
+            {},
+        )
+
+        if isinstance(argumentos, str):
+            try:
+                argumentos = json.loads(
+                    argumentos,
+                )
+            except json.JSONDecodeError:
+                argumentos = {}
+
+        if not isinstance(argumentos, dict):
+            argumentos = {}
+
+        if not ferramenta_id:
+            continue
+
+        try:
+            resultado = executar_ferramenta_autorizada(
+                contexto_id=contexto_id,
+                ferramenta_id=ferramenta_id,
+                argumentos=argumentos,
+            )
+
+            resultados_tools.append(
+                {
+                    "tool_call": tool_call,
+                    "resultado": resultado,
+                    "erro": None,
+                }
+            )
+
+        except Exception as erro:
+            resultados_tools.append(
+                {
+                    "tool_call": tool_call,
+                    "resultado": None,
+                    "erro": str(erro),
+                }
+            )
+
+    # --------------------------------------------------------
+    # SEGUNDA CHAMADA AO MODELO
+    # --------------------------------------------------------
+
+    resposta_final = resposta_modelo
+
+    if resultados_tools:
+        mensagem_assistente = {
+            "role": "assistant",
+            "content": mensagem_resposta.get(
+                "content",
+                "",
+            ),
+            "tool_calls": tool_calls,
+        }
+
+        mensagens_modelo.append(
+            mensagem_assistente,
+        )
+
+        for resultado_tool in resultados_tools:
+            tool_call = resultado_tool[
+                "tool_call"
+            ]
+
+            function_data = tool_call.get(
+                "function",
+                {},
+            )
+
+            ferramenta_id = function_data.get(
+                "name",
+                "",
+            )
+
+            resultado = resultado_tool[
+                "resultado"
+            ]
+
+            erro = resultado_tool[
+                "erro"
+            ]
+
+            if erro:
+                conteudo_tool = json.dumps(
+                    {
+                        "erro": erro,
+                    },
+                    ensure_ascii=False,
+                )
+
+            else:
+                try:
+                    conteudo_tool = json.dumps(
+                        resultado,
+                        ensure_ascii=False,
+                    )
+                except TypeError:
+                    conteudo_tool = str(
+                        resultado,
+                    )
+
+            mensagens_modelo.append(
+                {
+                    "role": "tool",
+                    "content": conteudo_tool,
+                    "name": ferramenta_id,
+                }
+            )
+
+        resposta_final = MODEL_PROVIDER.gerar(
+            modelo=modelo,
+            mensagens=mensagens_modelo,
+            temperatura=0.5,
+            ferramentas=ferramentas or None,
+        )
+
+    # --------------------------------------------------------
+    # CONTEÃšDO FINAL
+    # --------------------------------------------------------
+
+    mensagem_final = resposta_final.get(
+        "message",
+        {},
+    )
+
+    if isinstance(mensagem_final, dict):
+        conteudo_final = mensagem_final.get(
+            "content",
+            "",
+        )
+    else:
+        conteudo_final = ""
+
+    if not isinstance(
+        conteudo_final,
+        str,
+    ):
+        conteudo_final = str(
+            conteudo_final,
+        )
+
+    # --------------------------------------------------------
+    # PERSISTÃŠNCIA
+    # --------------------------------------------------------
+
+    mensagem_assistente_final = {
+        "role": "assistant",
+        "content": conteudo_final,
+        "model": modelo,
+        "skill": skill_id,
+        "route": rota.rota,
+        "confidence": rota.confianca,
+        "reason": rota.motivo,
+        "router_metadata": rota.metadata,
+        "plan": serializar_plano(plano),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    mensagens_chat.append(
+        mensagem_assistente_final,
+    )
+
+    chat["messages"] = mensagens_chat
+
+    chat["updated_at"] = (
+        datetime.now().isoformat()
+    )
+
+    storage.salvar_chat(
+        chat,
+    )
+
+    # --------------------------------------------------------
+    # SSE FINAL
+    # --------------------------------------------------------
+
+    yield (
+        "data: "
+        + json.dumps(
+            {
+                "type": "message",
+                "content": conteudo_final,
+                "model": modelo,
+                "route": rota.rota,
+                "skill": skill_id,
+                "confidence": rota.confianca,
+                "reason": rota.motivo,
+                "router_metadata": rota.metadata,
+                "plan": serializar_plano(plano),
+            },
+            ensure_ascii=False,
+        )
+        + "\n\n"
+    )
+
+    yield (
+        "data: "
+        + json.dumps(
+            {
+                "type": "done",
+                "chat_id": chat_id,
+            },
+            ensure_ascii=False,
+        )
+        + "\n\n"
+    )
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class ModelContract:
+    """
+    Representa um modelo de IA de forma independente
+    do provider utilizado para executÃ¡-lo.
+    """
+
+    id: str
+    nome: str
+    provider: str = "ollama"
+
+    descricao: str = ""
+
+    suporta_tools: bool = False
+    suporta_vision: bool = False
+
+    contexto_maximo: int | None = None
+
+    capacidades: list[str] = field(
+        default_factory=list
+    )
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+    def validar(self) -> tuple[bool, str]:
+        if not self.id.strip():
+            return False, (
+                "O modelo precisa possuir um ID."
+            )
+
+        if not self.nome.strip():
+            return False, (
+                "O modelo precisa possuir um nome."
+            )
+
+        if not self.provider.strip():
+            return False, (
+                "O modelo precisa possuir um provider."
+            )
+
+        if self.contexto_maximo is not None:
+            if self.contexto_maximo <= 0:
+                return False, (
+                    "O contexto mÃ¡ximo deve ser maior que zero."
+                )
+
+        if not isinstance(self.capacidades, list):
+            return False, (
+                "As capacidades devem ser uma lista."
+            )
+
+        if not isinstance(self.metadata, dict):
+            return False, (
+                "Os metadados devem ser um objeto."
+            )
+
+        return True, ""
+from app.ai.model_contract import ModelContract
+
+
+def criar_modelos_padrao() -> list[ModelContract]:
+    """
+    Cria os modelos inicialmente suportados pelo Agent Core.
+
+    Llama 3.2 permanece como modelo principal.
+    Qwen fica disponÃ­vel como modelo opcional.
+    """
+
+    return [
+        ModelContract(
+            id="llama3.2:1b",
+            nome="Llama 3.2 1B",
+            provider="ollama",
+            descricao=(
+                "Modelo principal para tarefas gerais "
+                "e processamento local."
+            ),
+            suporta_tools=True,
+            suporta_vision=False,
+            contexto_maximo=4096,
+            capacidades=[
+                "conversa",
+                "classificacao",
+                "resumo",
+                "extracao",
+                "tools",
+            ],
+        ),
+        ModelContract(
+            id="qwen",
+            nome="Qwen",
+            provider="ollama",
+            descricao=(
+                "Modelo opcional para tarefas tÃ©cnicas "
+                "e programaÃ§Ã£o."
+            ),
+            suporta_tools=True,
+            suporta_vision=False,
+            capacidades=[
+                "codigo",
+                "analise_tecnica",
+                "tools",
+            ],
+        ),
+    ]
+import os
+from abc import ABC, abstractmethod
+from typing import Any
+
+import requests
+
+from app.models.base import (
+    ChatResult,
+    Message,
+    ModelHealth,
+    ProviderError,
+)
+
+
+class ModelProvider(ABC):
+    """
+    Interface comum para execução de modelos de IA.
+    """
+
+    @abstractmethod
+    def gerar(
+        self,
+        modelo: str,
+        mensagens: list[dict],
+        temperatura: float = 0.5,
+        ferramentas: list[dict] | None = None,
+    ) -> dict:
+        raise NotImplementedError
+
+
+class OllamaModelProvider(ModelProvider):
+    """
+    Provider HTTP para Ollama.
+    """
+
+    def __init__(
+        self,
+        url: str | None = None,
+        timeout: int = 300,
+    ):
+        self.url = url or os.getenv(
+            "OLLAMA_URL",
+            "http://localhost:11434/api/chat",
+        )
+        self.timeout = timeout
+
+    def gerar(
+        self,
+        modelo: str,
+        mensagens: list[dict],
+        temperatura: float = 0.5,
+        ferramentas: list[dict] | None = None,
+    ) -> dict:
+        payload: dict[str, Any] = {
+            "model": modelo,
+            "messages": mensagens,
+            "stream": False,
+            "options": {
+                "temperature": temperatura,
+            },
+        }
+
+        if ferramentas:
+            payload["tools"] = ferramentas
+
+        resposta = requests.post(
+            self.url,
+            json=payload,
+            timeout=self.timeout,
+        )
+
+        resposta.raise_for_status()
+
+        dados = resposta.json()
+
+        if not isinstance(dados, dict):
+            raise RuntimeError(
+                "O provedor Ollama retornou uma resposta inválida."
+            )
+
+        return dados
+
+
+def criar_model_provider() -> ModelProvider:
+    provider = os.getenv(
+        "MODEL_PROVIDER",
+        "ollama",
+    ).strip().lower()
+
+    if provider == "ollama":
+        return OllamaModelProvider()
+
+    raise ValueError(
+        f"Model Provider não suportado: '{provider}'."
+    )
+from app.ai.model_contract import ModelContract
+
+
+class ModelRegistry:
+    """
+    Registro central dos modelos disponíveis no Agent Core.
+    """
+
+    def __init__(self):
+        self._modelos: dict[str, ModelContract] = {}
+
+    def registrar(
+        self,
+        modelo: ModelContract,
+    ) -> None:
+        valido, erro = modelo.validar()
+
+        if not valido:
+            raise ValueError(
+                f"Modelo inválido: {erro}"
+            )
+
+        if modelo.id in self._modelos:
+            raise ValueError(
+                f"O modelo '{modelo.id}' já está registrado."
+            )
+
+        self._modelos[modelo.id] = modelo
+
+    def obter(
+        self,
+        modelo_id: str,
+    ) -> ModelContract | None:
+        return self._modelos.get(modelo_id)
+
+    def selecionar(
+        self,
+        modelo_id: str,
+        fallback_id: str = "llama3.2:1b",
+    ) -> tuple[ModelContract, bool]:
+        """
+        Seleciona um modelo registrado.
+
+        Retorna:
+            (modelo, fallback_utilizado)
+        """
+
+        modelo = self.obter(modelo_id)
+
+        if modelo is not None:
+            return modelo, False
+
+        fallback = self.obter(fallback_id)
+
+        if fallback is None:
+            raise ValueError(
+                f"O modelo '{modelo_id}' não está registrado "
+                f"e o fallback '{fallback_id}' também não está disponível."
+            )
+
+        return fallback, True
+
+    def existe(
+        self,
+        modelo_id: str,
+    ) -> bool:
+        return modelo_id in self._modelos
+
+    def listar(self) -> list[ModelContract]:
+        return list(self._modelos.values())
+
+    def remover(
+        self,
+        modelo_id: str,
+    ) -> bool:
+        if modelo_id not in self._modelos:
+            return False
+
+        del self._modelos[modelo_id]
+        return True
+
+    def limpar(self) -> None:
+        self._modelos.clear()
+
+
+def criar_registry_padrao() -> ModelRegistry:
+    from app.ai.model_profile import criar_modelos_padrao
+
+    registry = ModelRegistry()
+
+    for modelo in criar_modelos_padrao():
+        registry.registrar(modelo)
+
+    return registry
+
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi.responses import StreamingResponse
+import shutil
+import os
+
+from app.api.schemas import ChatRequest
+from app.core.security import verificar_token
+from app import services
+from app.infrastructure import storage
+from app.infrastructure import audio
+
+app = FastAPI()
+
+# ==========================================
+# ROTAS DA API
+# ==========================================
+
+@app.get("/agentes", dependencies=[Depends(verificar_token)])
+async def listar_agentes():
+    """ Retorna a lista de todas as Skills e Tools disponÃ­veis. """
+    return storage.listar_todos_agentes()  
+
+@app.get("/chats", dependencies=[Depends(verificar_token)])
+async def listar_chats():
+    """ Retorna o histÃ³rico de todas as conversas salvas em JSON. """
+    return storage.listar_historico_chats()  
+
+@app.get("/chats/{chat_id}", dependencies=[Depends(verificar_token)])
+async def carregar_chat(chat_id: str):
+    """ Carrega as mensagens de uma conversa especÃ­fica. """
+    chat = storage.obter_chat(chat_id)  
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat nÃ£o encontrado.")
+    return chat
+
+@app.post("/chat", dependencies=[Depends(verificar_token)])
+async def chat(requisicao: ChatRequest):
+    """ Processa a mensagem do usuÃ¡rio e retorna a resposta em Streaming (SSE). """
+    try:
+        # CORREÃ‡ÃƒO: Removemos o 'await' aqui. 
+        # A funÃ§Ã£o geradora Ã© atribuÃ­da diretamente Ã  variÃ¡vel.
+        gerador = services.processar_mensagem_ia_stream(requisicao)
+        
+        return StreamingResponse(gerador, media_type="text/event-stream")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro no Processamento: {e}")
+
+@app.post("/transcrever", dependencies=[Depends(verificar_token)])
+async def transcrever(arquivo: UploadFile = File(...)):
+    """ Recebe o Ã¡udio do celular e devolve o texto transcrito via Whisper. """
+    try:
+        caminho_temp = f"temp_audio_{arquivo.filename}"
+        
+        with open(caminho_temp, "wb") as buffer:
+            shutil.copyfileobj(arquivo.file, buffer)
+            
+        texto_extraido = audio.transcrever_audio(caminho_temp)
+        
+        return {"texto": texto_extraido}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Falha ao processar Ã¡udio: {e}")
+
+from pydantic import BaseModel, Field
+from typing import Optional
+
+
+class AgenteInfo(BaseModel):
+    id: str
+    nome: str
+    icone: str
+    tipo: str
+    modelo: str
+    temperatura: float
+    prompt_sistema: str
+
+    # Ferramentas que esta Skill estÃ¡ autorizada a disponibilizar ao modelo.
+    # Lista vazia significa que nenhuma ferramenta serÃ¡ disponibilizada.
+    ferramentas_permitidas: list[str] = Field(default_factory=list)
+
+
+class ChatRequest(BaseModel):
+    texto: str
+    skill_id: Optional[str] = "default"
+    tool_id: Optional[str] = None
+    chat_id: Optional[str] = None
+    imagem_base64: Optional[str] = None
+
+from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="AGENT_", env_file=".env", extra="forbid")
+    api_token: SecretStr
+    data_dir: Path = Path("data")
+    host: Literal["127.0.0.1", "::1"] = "127.0.0.1"
+    port: int = Field(default=8000, ge=1024, le=65535)
+    model_provider: Literal["ollama"] = "ollama"
+    ollama_url: str = "http://127.0.0.1:11434"
+    model: str = Field(default="llama3.2:1b", min_length=1, max_length=160)
+    context_window: int = Field(default=2048, ge=512, le=8192)
+    max_output_tokens: int = Field(default=128, ge=1, le=2048)
+    health_timeout: float = Field(default=3, gt=0, le=30)
+    generation_timeout: float = Field(default=120, gt=0, le=600)
+
+    @field_validator("api_token")
+    @classmethod
+    def validate_token(cls, value: SecretStr) -> SecretStr:
+        token = value.get_secret_value()
+        if len(token) < 32 or token == "CHANGE_ME" or token.strip() != token:
+            raise ValueError("Configure um token aleatÃ³rio de pelo menos 32 caracteres")
+        return value
+
+    @field_validator("ollama_url")
+    @classmethod
+    def local_ollama_only(cls, value: str) -> str:
+        parts = urlsplit(value)
+        if (parts.scheme != "http" or parts.hostname not in {"localhost", "127.0.0.1", "::1"}
+                or parts.username or parts.password or parts.query or parts.fragment
+                or parts.path not in {"", "/"}):
+            raise ValueError("Fase 0 aceita Ollama somente no loopback HTTP")
+        _ = parts.port
+        return value.rstrip("/")
+
+    @property
+    def database_path(self) -> Path:
+        return self.data_dir / "memory.db"
+import json
+import logging
+from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        # Lista fechada: nunca serializa mensagem, exceÃ§Ã£o, URL, corpo ou cabeÃ§alhos.
+        output = {"timestamp": datetime.now(timezone.utc).isoformat(), "level": record.levelname}
+        for key in ("event", "request_id", "status", "duration_ms"):
+            if hasattr(record, key):
+                output[key] = getattr(record, key)
+        return json.dumps(output)
+
+
+def configure_logging(data_dir: Path) -> logging.Logger:
+    directory = data_dir / "logs"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    logger = logging.getLogger("personal_agent." + str(directory.resolve()))
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    if not logger.handlers:
+        file = directory / "agent.jsonl"
+        handler = RotatingFileHandler(file, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+        file.chmod(0o600)
+        handler.setFormatter(JsonFormatter())
+        logger.addHandler(handler)
+    return logger
+import os
+from fastapi import HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+security = HTTPBearer()
+
+def verificar_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token_correto = os.getenv("AGENT_API_TOKEN")
+    if credentials.credentials != token_correto:
+        raise HTTPException(status_code=401, detail="Token InvÃ¡lido. Acesso Negado.")
+    return credentials.credentials
+
+import whisper
+import os
+
+# Carrega o modelo "base" (equilÃ­brio perfeito entre velocidade e precisÃ£o)
+print(" Carregando motor de Ã¡udio Whisper (isso pode demorar na primeira vez)...")
+modelo_whisper = whisper.load_model("base")
+print(" Motor de Ã¡udio carregado!")
+
+def transcrever_audio(caminho_arquivo: str) -> str:
+    """ LÃª um arquivo fÃ­sico de Ã¡udio e devolve o texto em portuguÃªs. """
+    try:
+        # ForÃ§a o idioma para portuguÃªs para acelerar a inferÃªncia
+        resultado = modelo_whisper.transcribe(caminho_arquivo, language="pt")
+        return resultado.get("text", "").strip()
+    except Exception as e:
+        return f"[Erro na transcriÃ§Ã£o de Ã¡udio: {e}]"
+    finally:
+        # Garante que o arquivo temporÃ¡rio serÃ¡ deletado do PC para nÃ£o lotar o disco
+        if os.path.exists(caminho_arquivo):
+            os.remove(caminho_arquivo)
+import sqlite3
+from pathlib import Path
+
+
+class Database:
+    def __init__(self, path: Path):
+        self.path = path
+
+    def initialize(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with sqlite3.connect(self.path, timeout=5) as connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (0, 1):
+                raise RuntimeError("VersÃ£o de banco incompatÃ­vel")
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            connection.execute("INSERT OR IGNORE INTO app_metadata VALUES ('schema_version', '1')")
+            connection.execute("PRAGMA user_version=1")
+        self.path.chmod(0o600)
+
+    def ready(self) -> bool:
+        try:
+            uri = self.path.resolve().as_uri() + "?mode=rw"
+            with sqlite3.connect(uri, uri=True, timeout=2) as connection:
+                return connection.execute("SELECT value FROM app_metadata WHERE key='schema_version'").fetchone() == ('1',)
+        except sqlite3.Error:
+            return False
+import os
+import json
+from pathlib import Path
+from typing import Dict
+
+from app.api.schemas import AgenteInfo
+from app.skills.skill_loader import SkillLoader
+from app.skills.skill_frontmatter import (
+    ler_frontmatter,
+    criar_configuracao,
+)
+
+
+agentes_db: Dict[str, AgenteInfo] = {}
+
+
+# ==========================================
+# CARREGAMENTO PRINCIPAL
+# ==========================================
+
+def carregar_arquivos():
+
+    modelo_padrao = os.getenv(
+        "AGENT_MODEL",
+        "qwen2.5:1.5b"
+    )
+
+    # Limpa o estado anterior antes de recarregar
+    agentes_db.clear()
+
+    # ==========================================
+    # SKILL DEFAULT
+    # ==========================================
+
+    agentes_db["default"] = AgenteInfo(
+        id="default",
+        nome="Assistente PadrÃ£o",
+        icone="",
+        tipo="padrao",
+        modelo="llama3.2",
+        temperatura=0.2,
+        prompt_sistema=(
+            "VocÃª Ã© um assistente pessoal Ãºtil e direto."
+        ),
+        ferramentas_permitidas=[]
+    )
+
+    # ==========================================
+    # GARANTIR DIRETÃ“RIOS
+    # ==========================================
+
+    for pasta in [
+        "skills",
+        "tools",
+        "data",
+        "projetos"
+    ]:
+        os.makedirs(
+            pasta,
+            exist_ok=True
+        )
+
+    # ==========================================
+    # CARREGAMENTO DE SKILLS
+    # ==========================================
+
+    loader = SkillLoader(
+        Path("skills")
+    )
+
+    for skill_arquivo in loader.carregar_todas():
+
+        try:
+
+            conteudo = skill_arquivo.conteudo.strip()
+
+            if not conteudo:
+                continue
+
+            skill_id_padrao = skill_arquivo.id
+
+            if skill_id_padrao.lower() in [
+                "assets",
+                "images",
+                "docs",
+                "readme",
+            ]:
+                continue
+
+            # ==========================================
+            # FRONTMATTER
+            # ==========================================
+
+            configuracoes, prompt_final = ler_frontmatter(
+                conteudo
+            )
+
+            config = criar_configuracao(
+                configuracoes
+            )
+
+            # ==========================================
+            # IDENTIDADE DA SKILL
+            # ==========================================
+
+            skill_id = (
+                config.id
+                or skill_id_padrao
+            )
+
+            nome = (
+                config.nome
+                or skill_id.replace(
+                    "_",
+                    " "
+                ).replace(
+                    "-",
+                    " "
+                ).title()
+            )
+
+            icone = config.icone
+
+            tipo = config.tipo
+
+            # ==========================================
+            # CONFIGURAÃ‡ÃƒO DO MODELO
+            # ==========================================
+
+            modelo_final = (
+                config.modelo
+                or modelo_padrao
+            )
+
+            temperatura_final = (
+                config.temperatura
+            )
+
+            # ==========================================
+            # FERRAMENTAS PERMITIDAS
+            # ==========================================
+
+            ferramentas_permitidas = (
+                config.ferramentas_permitidas
+                or []
+            )
+
+            # ==========================================
+            # REGISTRAR SKILL
+            # ==========================================
+
+            agentes_db[skill_id] = AgenteInfo(
+                id=skill_id,
+                nome=nome,
+                icone=icone,
+                tipo=tipo,
+                modelo=modelo_final,
+                temperatura=temperatura_final,
+                prompt_sistema=prompt_final,
+                ferramentas_permitidas=(
+                    ferramentas_permitidas
+                )
+            )
+
+        except Exception as erro:
+
+            print(
+                f"Erro ao carregar Skill "
+                f"{skill_arquivo.caminho}: {erro}"
+            )
+
+    # ==========================================
+    # CARREGAMENTO DE TOOLS
+    # ==========================================
+
+    for arquivo in os.listdir("tools"):
+
+        if not arquivo.endswith(".md"):
+            continue
+
+        caminho = os.path.join(
+            "tools",
+            arquivo
+        )
+
+        try:
+
+            with open(
+                caminho,
+                "r",
+                encoding="utf-8"
+            ) as f:
+
+                conteudo = f.read().strip()
+
+            configuracoes, prompt_tool = (
+                ler_frontmatter(
+                    conteudo
+                )
+            )
+
+            if not configuracoes:
+                continue
+
+            tool_id = configuracoes.get(
+                "id",
+                arquivo.rsplit(
+                    ".",
+                    1
+                )[0]
+            )
+
+            try:
+
+                temperatura_tool = float(
+                    configuracoes.get(
+                        "temperatura",
+                        0.7
+                    )
+                )
+
+            except (
+                TypeError,
+                ValueError
+            ):
+
+                temperatura_tool = 0.7
+
+            agentes_db[tool_id] = AgenteInfo(
+                id=str(tool_id),
+
+                nome=str(
+                    configuracoes.get(
+                        "nome",
+                        "Tool"
+                    )
+                ),
+
+                icone=str(
+                    configuracoes.get(
+                        "icone",
+                        ""
+                    )
+                ),
+
+                tipo="tool",
+
+                modelo=str(
+                    configuracoes.get(
+                        "modelo",
+                        modelo_padrao
+                    )
+                ),
+
+                temperatura=temperatura_tool,
+
+                prompt_sistema=prompt_tool,
+
+                ferramentas_permitidas=[]
+            )
+
+        except Exception as erro:
+
+            print(
+                f"Erro ao carregar Tool "
+                f"{caminho}: {erro}"
+            )
+
+
+# ==========================================
+# INICIALIZAÃ‡ÃƒO
+# ==========================================
+
+carregar_arquivos()
+
+
+# ==========================================
+# CONSULTAS
+# ==========================================
+
+def listar_todos_agentes():
+
+    return [
+        {
+            "id": agente.id,
+            "nome": agente.nome,
+            "icone": agente.icone,
+            "tipo": agente.tipo
+        }
+        for agente in agentes_db.values()
+    ]
+
+
+def obter_agente(agente_id: str):
+
+    agente = agentes_db.get(
+        agente_id
+    )
+
+    if agente is None:
+        return None
+
+    return agente.model_dump()
+
+
+# ==========================================
+# HISTÃ“RICO
+# ==========================================
+
+def listar_historico_chats():
+
+    chats = []
+
+    if not os.path.exists("data"):
+        return chats
+
+    for arquivo in os.listdir("data"):
+
+        if not arquivo.endswith(".json"):
+            continue
+
+        caminho = os.path.join(
+            "data",
+            arquivo
+        )
+
+        try:
+
+            with open(
+                caminho,
+                "r",
+                encoding="utf-8"
+            ) as f:
+
+                dados = json.load(f)
+
+            chats.append(
+                {
+                    "id": dados.get("id"),
+
+                    "titulo": dados.get(
+                        "titulo",
+                        "Novo Chat"
+                    ),
+
+                    "atualizado_em": os.path.getmtime(
+                        caminho
+                    )
+                }
+            )
+
+        except Exception:
+            continue
+
+    chats.sort(
+        key=lambda x: x["atualizado_em"],
+        reverse=True
+    )
+
+    return chats
+
+
+def obter_chat(chat_id: str):
+
+    caminho = os.path.join(
+        "data",
+        f"{chat_id}.json"
+    )
+
+    if not os.path.exists(caminho):
+        return None
+
+    with open(
+        caminho,
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        return json.load(f)
+
+
+# ==========================================
+# PERSISTÃŠNCIA DE CHAT
+# ==========================================
+
+def salvar_chat(
+    chat_id: str,
+    chat_data: dict
+):
+
+    os.makedirs(
+        "data",
+        exist_ok=True
+    )
+
+    caminho = os.path.join(
+        "data",
+        f"{chat_id}.json"
+    )
+
+    with open(
+        caminho,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        json.dump(
+            chat_data,
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
+
+from app.memory.memory_retrieval import MemoryRetriever
+from app.memory.rag_retrieval import RAGRetriever
+
+
+class ContextRetriever:
+    def __init__(
+        self,
+        memory_retriever: MemoryRetriever,
+        rag_retriever: RAGRetriever,
+    ):
+        self.memory_retriever = memory_retriever
+        self.rag_retriever = rag_retriever
+
+    def buscar(
+        self,
+        consulta: str,
+        limite_memoria: int = 5,
+        limite_rag: int = 5,
+    ) -> dict:
+        memorias = self.memory_retriever.buscar(
+            consulta,
+            limite=limite_memoria,
+        )
+
+        documentos = self.rag_retriever.buscar(
+            consulta,
+            limite=limite_rag,
+        )
+
+        return {
+            "memorias": memorias,
+            "documentos": documentos,
+        }
+
+    def construir_contexto(
+        self,
+        contexto: dict,
+    ) -> str:
+        memorias = contexto.get(
+            "memorias",
+            [],
+        )
+
+        documentos = contexto.get(
+            "documentos",
+            [],
+        )
+
+        partes = []
+
+        if memorias:
+            partes.append(
+                "MemÃ³rias relevantes:"
+            )
+
+            for memoria in memorias:
+                partes.append(
+                    f"- [{memoria.tipo}] "
+                    f"{memoria.conteudo}"
+                )
+
+        if documentos:
+            if partes:
+                partes.append("")
+
+            partes.append(
+                "Documentos relevantes:"
+            )
+
+            for documento in documentos:
+                partes.append(
+                    f"- [{documento.id}] "
+                    f"{documento.conteudo}"
+                )
+
+        return "\n".join(partes)
+from pathlib import Path
+
+from app.memory.rag_contract import DocumentContract
+
+
+EXTENSOES_TIPOS = {
+    ".txt": "text",
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".py": "code",
+    ".js": "code",
+    ".ts": "code",
+    ".java": "code",
+    ".kt": "code",
+    ".php": "code",
+    ".cpp": "code",
+    ".c": "code",
+    ".h": "code",
+    ".hpp": "code",
+    ".html": "html",
+    ".htm": "html",
+    ".json": "json",
+}
+
+
+class DocumentIngestion:
+    def __init__(
+        self,
+        encoding: str = "utf-8",
+    ):
+        self.encoding = encoding
+
+    def ingerir_arquivo(
+        self,
+        caminho: str | Path,
+    ) -> DocumentContract:
+        caminho = Path(caminho)
+
+        if not caminho.exists():
+            raise FileNotFoundError(
+                f"Arquivo nÃ£o encontrado: {caminho}"
+            )
+
+        if not caminho.is_file():
+            raise ValueError(
+                f"O caminho informado nÃ£o Ã© um arquivo: {caminho}"
+            )
+
+        tipo = self._detectar_tipo(caminho)
+
+        if tipo is None:
+            raise ValueError(
+                f"ExtensÃ£o nÃ£o suportada: '{caminho.suffix}'"
+            )
+
+        conteudo = caminho.read_text(
+            encoding=self.encoding
+        )
+
+        documento = DocumentContract(
+            id=self._gerar_id(caminho),
+            nome=caminho.name,
+            conteudo=conteudo,
+            tipo=tipo,
+            origem=str(caminho),
+            metadata={
+                "extensao": caminho.suffix.lower(),
+                "nome_arquivo": caminho.name,
+                "caminho": str(caminho),
+            },
+        )
+
+        valido, erro = documento.validar()
+
+        if not valido:
+            raise ValueError(
+                f"Documento invÃ¡lido: {erro}"
+            )
+
+        return documento
+
+    def ingerir_texto(
+        self,
+        texto: str,
+        nome: str,
+        tipo: str = "text",
+        origem: str = "manual",
+    ) -> DocumentContract:
+        documento = DocumentContract(
+            id=self._gerar_id_nome(nome),
+            nome=nome,
+            conteudo=texto,
+            tipo=tipo,
+            origem=origem,
+            metadata={
+                "nome_arquivo": nome,
+            },
+        )
+
+        valido, erro = documento.validar()
+
+        if not valido:
+            raise ValueError(
+                f"Documento invÃ¡lido: {erro}"
+            )
+
+        return documento
+
+    def _detectar_tipo(
+        self,
+        caminho: Path,
+    ) -> str | None:
+        return EXTENSOES_TIPOS.get(
+            caminho.suffix.lower()
+        )
+
+    def _gerar_id(
+        self,
+        caminho: Path,
+    ) -> str:
+        return self._gerar_id_nome(
+            str(caminho.resolve())
+        )
+
+    def _gerar_id_nome(
+        self,
+        valor: str,
+    ) -> str:
+        import hashlib
+
+        return hashlib.sha256(
+            valor.encode("utf-8")
+        ).hexdigest()[:16]
+from abc import ABC, abstractmethod
+
+
+class EmbeddingProvider(ABC):
+
+    @abstractmethod
+    def gerar(
+        self,
+        texto: str,
+    ) -> list[float]:
+        raise NotImplementedError
+
+
+
+class HashEmbeddingProvider(
+    EmbeddingProvider
+):
+    def __init__(
+        self,
+        dimensao: int = 32,
+    ):
+        self.dimensao = dimensao
+
+    def gerar(
+        self,
+        texto: str,
+    ) -> list[float]:
+        import hashlib
+
+        valores = []
+
+        for indice in range(
+            self.dimensao
+        ):
+            digest = hashlib.sha256(
+                f"{indice}:{texto}".encode(
+                    "utf-8"
+                )
+            ).digest()
+
+            valor = int.from_bytes(
+                digest[:4],
+                byteorder="big",
+            )
+
+            valores.append(
+                valor / 4_294_967_295
+            )
+
+        return valores
+
+def criar_embedding_provider():
+    return HashEmbeddingProvider()
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+
+TIPOS_MEMORIA_VALIDOS = {
+    "fact",
+    "preference",
+    "context",
+    "summary",
+}
+
+
+@dataclass
+class MemoryContract:
+    id: str
+    conteudo: str
+    tipo: str = "context"
+    origem: str = "conversation"
+    importancia: float = 0.5
+    metadata: dict[str, Any] = field(default_factory=dict)
+    criado_em: str = field(
+        default_factory=lambda: datetime.now().isoformat()
+    )
+
+    def validar(self) -> tuple[bool, str]:
+        if not self.id.strip():
+            return False, "A memÃ³ria precisa possuir um ID."
+
+        if not self.conteudo.strip():
+            return False, "A memÃ³ria precisa possuir conteÃºdo."
+
+        if self.tipo not in TIPOS_MEMORIA_VALIDOS:
+            return False, (
+                f"Tipo de memÃ³ria invÃ¡lido: '{self.tipo}'."
+            )
+
+        if not 0.0 <= self.importancia <= 1.0:
+            return False, (
+                "A importÃ¢ncia deve estar entre 0.0 e 1.0."
+            )
+
+        if not isinstance(self.metadata, dict):
+            return False, (
+                "Os metadados da memÃ³ria devem ser um objeto."
+            )
+
+        return True, ""
+import re
+
+from app.memory.memory_contract import MemoryContract
+from app.memory.memory_store import MemoryStore
+
+
+class MemoryRetriever:
+    def __init__(self, store: MemoryStore):
+        self.store = store
+
+    def buscar(
+        self,
+        consulta: str,
+        limite: int = 5,
+    ) -> list[MemoryContract]:
+        consulta_normalizada = self._normalizar(
+            consulta
+        )
+
+        if not consulta_normalizada:
+            return []
+
+        if limite <= 0:
+            return []
+
+        termos = set(
+            consulta_normalizada.split()
+        )
+
+        memorias = self.store.listar()
+        resultados = []
+
+        for memoria in memorias:
+            texto = self._normalizar(
+                memoria.conteudo
+            )
+
+            palavras = set(
+                texto.split()
+            )
+
+            correspondencias = len(
+                termos & palavras
+            )
+
+            if correspondencias == 0:
+                continue
+
+            pontuacao = (
+                correspondencias
+                + memoria.importancia
+            )
+
+            resultados.append(
+                (
+                    pontuacao,
+                    memoria,
+                )
+            )
+
+        resultados.sort(
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+        return [
+            memoria
+            for _, memoria in resultados[:limite]
+        ]
+
+    def buscar_por_tipo(
+        self,
+        tipo: str,
+        limite: int = 5,
+    ) -> list[MemoryContract]:
+        if limite <= 0:
+            return []
+
+        memorias = [
+            memoria
+            for memoria in self.store.listar()
+            if memoria.tipo == tipo
+        ]
+
+        memorias.sort(
+            key=lambda memoria: memoria.importancia,
+            reverse=True,
+        )
+
+        return memorias[:limite]
+
+    def _normalizar(
+        self,
+        texto: str,
+    ) -> str:
+        texto = texto.lower()
+
+        texto = re.sub(
+            r"[^\w\s]",
+            " ",
+            texto,
+            flags=re.UNICODE,
+        )
+
+        texto = re.sub(
+            r"\s+",
+            " ",
+            texto,
+        )
+
+        return texto.strip()
+import json
+from pathlib import Path
+
+from app.memory.memory_contract import MemoryContract
+
+
+class MemoryStore:
+    """
+    PersistÃªncia local das memÃ³rias do Agent Core.
+
+    Nesta fase utiliza arquivos JSON.
+    A implementaÃ§Ã£o pode ser substituÃ­da futuramente
+    sem alterar o contrato de memÃ³ria.
+    """
+
+    def __init__(
+        self,
+        diretorio: str | Path = "data/memory",
+    ):
+        self.diretorio = Path(diretorio)
+        self.diretorio.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+    def salvar(
+        self,
+        memoria: MemoryContract,
+    ) -> None:
+        valido, erro = memoria.validar()
+
+        if not valido:
+            raise ValueError(
+                f"MemÃ³ria invÃ¡lida: {erro}"
+            )
+
+        caminho = self.diretorio / f"{memoria.id}.json"
+
+        caminho.write_text(
+            json.dumps(
+                {
+                    "id": memoria.id,
+                    "conteudo": memoria.conteudo,
+                    "tipo": memoria.tipo,
+                    "origem": memoria.origem,
+                    "importancia": memoria.importancia,
+                    "metadata": memoria.metadata,
+                    "criado_em": memoria.criado_em,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def obter(
+        self,
+        memoria_id: str,
+    ) -> MemoryContract | None:
+        caminho = self.diretorio / f"{memoria_id}.json"
+
+        if not caminho.exists():
+            return None
+
+        dados = json.loads(
+            caminho.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        return MemoryContract(
+            id=dados["id"],
+            conteudo=dados["conteudo"],
+            tipo=dados.get(
+                "tipo",
+                "context",
+            ),
+            origem=dados.get(
+                "origem",
+                "conversation",
+            ),
+            importancia=dados.get(
+                "importancia",
+                0.5,
+            ),
+            metadata=dados.get(
+                "metadata",
+                {},
+            ),
+            criado_em=dados.get(
+                "criado_em",
+                "",
+            ),
+        )
+
+    def listar(self) -> list[MemoryContract]:
+        memorias = []
+
+        for caminho in sorted(
+            self.diretorio.glob("*.json")
+        ):
+            memoria = self.obter(
+                caminho.stem
+            )
+
+            if memoria is not None:
+                memorias.append(memoria)
+
+        return memorias
+
+    def remover(
+        self,
+        memoria_id: str,
+    ) -> bool:
+        caminho = self.diretorio / f"{memoria_id}.json"
+
+        if not caminho.exists():
+            return False
+
+        caminho.unlink()
+        return True
+
+    def limpar(self) -> None:
+        for caminho in self.diretorio.glob("*.json"):
+            caminho.unlink()
+from dataclasses import dataclass, field
+from typing import Any
+
+
+TIPOS_DOCUMENTO_VALIDOS = {
+    "text",
+    "markdown",
+    "code",
+    "pdf",
+    "html",
+    "json",
+}
+
+
+@dataclass
+class DocumentContract:
+    id: str
+    conteudo: str
+    nome: str
+    tipo: str = "text"
+    origem: str = "local"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def validar(self) -> tuple[bool, str]:
+        if not self.id.strip():
+            return False, "O documento precisa possuir um ID."
+
+        if not self.nome.strip():
+            return False, "O documento precisa possuir um nome."
+
+        if not self.conteudo.strip():
+            return False, "O documento precisa possuir conteÃºdo."
+
+        if self.tipo not in TIPOS_DOCUMENTO_VALIDOS:
+            return False, (
+                f"Tipo de documento invÃ¡lido: '{self.tipo}'."
+            )
+
+        if not isinstance(self.metadata, dict):
+            return False, (
+                "Os metadados do documento devem ser um objeto."
+            )
+
+        return True, ""
+import math
+
+from app.memory.embedding_provider import EmbeddingProvider
+from app.memory.vector_contract import VectorDocument
+from app.memory.vector_store import VectorStore
+
+
+class RAGRetriever:
+    def __init__(
+        self,
+        vector_store: VectorStore,
+        embedding_provider: EmbeddingProvider,
+    ):
+        self.vector_store = vector_store
+        self.embedding_provider = embedding_provider
+
+    def buscar(
+        self,
+        consulta: str,
+        limite: int = 5,
+    ) -> list[VectorDocument]:
+        consulta = consulta.strip()
+
+        if not consulta:
+            return []
+
+        if limite <= 0:
+            return []
+
+        embedding_consulta = (
+            self.embedding_provider.gerar(
+                consulta
+            )
+        )
+
+        documentos = self.vector_store.listar()
+
+        resultados = []
+
+        for documento in documentos:
+            similaridade = self._similaridade_cosseno(
+                embedding_consulta,
+                documento.embedding,
+            )
+
+            resultados.append(
+                (
+                    similaridade,
+                    documento,
+                )
+            )
+
+        resultados.sort(
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+        return [
+            documento
+            for _, documento in resultados[:limite]
+        ]
+
+    def buscar_com_pontuacao(
+        self,
+        consulta: str,
+        limite: int = 5,
+    ) -> list[tuple[VectorDocument, float]]:
+        consulta = consulta.strip()
+
+        if not consulta:
+            return []
+
+        if limite <= 0:
+            return []
+
+        embedding_consulta = (
+            self.embedding_provider.gerar(
+                consulta
+            )
+        )
+
+        resultados = []
+
+        for documento in self.vector_store.listar():
+            similaridade = self._similaridade_cosseno(
+                embedding_consulta,
+                documento.embedding,
+            )
+
+            resultados.append(
+                (
+                    documento,
+                    similaridade,
+                )
+            )
+
+        resultados.sort(
+            key=lambda item: item[1],
+            reverse=True,
+        )
+
+        return resultados[:limite]
+
+    def _similaridade_cosseno(
+        self,
+        vetor_a: list[float],
+        vetor_b: list[float],
+    ) -> float:
+        if len(vetor_a) != len(vetor_b):
+            raise ValueError(
+                "Os embeddings precisam possuir "
+                "a mesma dimensÃ£o."
+            )
+
+        produto_escalar = sum(
+            a * b
+            for a, b in zip(
+                vetor_a,
+                vetor_b,
+            )
+        )
+
+        norma_a = math.sqrt(
+            sum(
+                valor * valor
+                for valor in vetor_a
+            )
+        )
+
+        norma_b = math.sqrt(
+            sum(
+                valor * valor
+                for valor in vetor_b
+            )
+        )
+
+        if norma_a == 0 or norma_b == 0:
+            return 0.0
+
+        return (
+            produto_escalar
+            / (norma_a * norma_b)
+        )
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class VectorDocument:
+    id: str
+    documento_id: str
+    conteudo: str
+    embedding: list[float]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def validar(self) -> tuple[bool, str]:
+        if not self.id.strip():
+            return False, "O vetor precisa possuir um ID."
+
+        if not self.documento_id.strip():
+            return False, (
+                "O vetor precisa possuir um documento_id."
+            )
+
+        if not self.conteudo.strip():
+            return False, (
+                "O vetor precisa possuir conteÃºdo."
+            )
+
+        if not isinstance(self.embedding, list):
+            return False, (
+                "O embedding deve ser uma lista."
+            )
+
+        if not self.embedding:
+            return False, (
+                "O embedding nÃ£o pode estar vazio."
+            )
+
+        if not all(
+            isinstance(valor, (int, float))
+            and not isinstance(valor, bool)
+            for valor in self.embedding
+        ):
+            return False, (
+                "Todos os valores do embedding "
+                "devem ser numÃ©ricos."
+            )
+
+        if not isinstance(self.metadata, dict):
+            return False, (
+                "Os metadados devem ser um objeto."
+            )
+
+        return True, ""
+import json
+from pathlib import Path
+
+from app.memory.vector_contract import VectorDocument
+
+
+class VectorStore:
+    def __init__(
+        self,
+        diretorio: str | Path = "data/vectors",
+    ):
+        self.diretorio = Path(diretorio)
+        self.diretorio.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+    def salvar(
+        self,
+        documento: VectorDocument,
+    ) -> None:
+        valido, erro = documento.validar()
+
+        if not valido:
+            raise ValueError(
+                f"Vetor invÃ¡lido: {erro}"
+            )
+
+        caminho = (
+            self.diretorio
+            / f"{documento.id}.json"
+        )
+
+        caminho.write_text(
+            json.dumps(
+                {
+                    "id": documento.id,
+                    "documento_id": documento.documento_id,
+                    "conteudo": documento.conteudo,
+                    "embedding": documento.embedding,
+                    "metadata": documento.metadata,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def obter(
+        self,
+        vetor_id: str,
+    ) -> VectorDocument | None:
+        caminho = (
+            self.diretorio
+            / f"{vetor_id}.json"
+        )
+
+        if not caminho.exists():
+            return None
+
+        dados = json.loads(
+            caminho.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        return VectorDocument(
+            id=dados["id"],
+            documento_id=dados["documento_id"],
+            conteudo=dados["conteudo"],
+            embedding=dados["embedding"],
+            metadata=dados.get(
+                "metadata",
+                {},
+            ),
+        )
+
+    def listar(self) -> list[VectorDocument]:
+        documentos = []
+
+        for caminho in sorted(
+            self.diretorio.glob("*.json")
+        ):
+            documento = self.obter(
+                caminho.stem
+            )
+
+            if documento is not None:
+                documentos.append(documento)
+
+        return documentos
+
+    def remover(
+        self,
+        vetor_id: str,
+    ) -> bool:
+        caminho = (
+            self.diretorio
+            / f"{vetor_id}.json"
+        )
+
+        if not caminho.exists():
+            return False
+
+        caminho.unlink()
+        return True
+
+    def limpar(self) -> None:
+        for caminho in self.diretorio.glob(
+            "*.json"
+        ):
+            caminho.unlink()
+
+from typing import Protocol, Literal
+from pydantic import BaseModel, Field
+
+
+class Message(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(min_length=1, max_length=16000)
+
+
+class ModelHealth(BaseModel):
+    status: Literal["ready", "unreachable", "model_missing", "invalid_response"]
+    model: str
+
+
+class ChatResult(BaseModel):
+    content: str
+    model: str
+
+
+class ProviderError(RuntimeError):
+    """Erro sanitizado; nÃ£o carrega corpo da resposta ou credenciais."""
+
+
+class ModelProvider(Protocol):
+    async def health(self) -> ModelHealth: ...
+    async def chat(self, messages: list[Message]) -> ChatResult: ...
+    async def aclose(self) -> None: ...
+import httpx
+from app.core.config import Settings
+from app.models.base import ChatResult, Message, ModelHealth, ProviderError
+
+
+class OllamaProvider:
+    def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None):
+        self.settings = settings
+        self.client = httpx.AsyncClient(base_url=settings.ollama_url, trust_env=False,
+                                       follow_redirects=False, transport=transport)
+
+    async def health(self) -> ModelHealth:
+        status = "ready"
+        try:
+            response = await self.client.get("/api/tags", timeout=self.settings.health_timeout)
+            response.raise_for_status()
+            models = response.json()["models"]
+            if not isinstance(models, list) or any(not isinstance(m, dict) or not isinstance(m.get("name"), str) for m in models):
+                raise ValueError("invalid models")
+            if self.settings.model not in {m["name"] for m in models}:
+                status = "model_missing"
+        except httpx.HTTPError:
+            status = "unreachable"
+        except (ValueError, KeyError, TypeError):
+            status = "invalid_response"
+        return ModelHealth(status=status, model=self.settings.model)
+
+    async def chat(self, messages: list[Message]) -> ChatResult:
+        if not messages:
+            raise ProviderError("empty_messages")
+        payload = {"model": self.settings.model, "messages": [m.model_dump() for m in messages],
+                   "stream": False, "keep_alive": "1m",
+                   "options": {"num_ctx": self.settings.context_window,
+                               "num_predict": self.settings.max_output_tokens}}
+        try:
+            response = await self.client.post("/api/chat", json=payload,
+                                              timeout=self.settings.generation_timeout)
+            response.raise_for_status()
+            body = response.json()
+            content = body["message"]["content"]
+            if body.get("done") is not True or not isinstance(content, str) or not content.strip():
+                raise ValueError("incomplete response")
+            return ChatResult(content=content, model=self.settings.model)
+        except httpx.HTTPError:
+            raise ProviderError("ollama_request_failed") from None
+        except (KeyError, TypeError, ValueError):
+            raise ProviderError("ollama_invalid_response") from None
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
+from app.core.config import Settings
+from app.models.base import ModelProvider
+from app.models.ollama import OllamaProvider
+
+
+def create_provider(settings: Settings) -> ModelProvider:
+    # SeleÃ§Ã£o por backend; nenhuma decisÃ£o por nome/famÃ­lia do modelo.
+    factories = {"ollama": OllamaProvider}
+    return factories[settings.model_provider](settings)
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+TIPOS_CONTEXTO_VALIDOS = {
+    "skill",
+    "chat",
+    "agent",
+    "system",
+}
+
+
+@dataclass
+class PermissionContext:
+    id: str
+    tipo: str
+    origem: str = ""
+    descricao: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def validar(self) -> tuple[bool, str]:
+        if not self.id.strip():
+            return False, (
+                "O contexto precisa possuir um ID."
+            )
+
+        if self.tipo not in TIPOS_CONTEXTO_VALIDOS:
+            return False, (
+                f"Tipo de contexto invÃ¡lido: "
+                f"'{self.tipo}'."
+            )
+
+        if not isinstance(self.metadata, dict):
+            return False, (
+                "Os metadados do contexto "
+                "devem ser um objeto."
+            )
+
+        return True, ""
+from app.permissions.permission_context import PermissionContext
+
+
+class PermissionContextRegistry:
+    def __init__(self):
+        self._contextos: dict[str, PermissionContext] = {}
+
+    def registrar(
+        self,
+        contexto: PermissionContext,
+    ) -> None:
+        valido, erro = contexto.validar()
+
+        if not valido:
+            raise ValueError(
+                f"Contexto invÃ¡lido: {erro}"
+            )
+
+        if contexto.id in self._contextos:
+            raise ValueError(
+                f"O contexto '{contexto.id}' jÃ¡ estÃ¡ registrado."
+            )
+
+        self._contextos[contexto.id] = contexto
+
+    def obter(
+        self,
+        contexto_id: str,
+    ) -> PermissionContext | None:
+        return self._contextos.get(contexto_id)
+
+    def existe(
+        self,
+        contexto_id: str,
+    ) -> bool:
+        return contexto_id in self._contextos
+
+    def listar(
+        self,
+        tipo: str | None = None,
+    ) -> list[PermissionContext]:
+        contextos = list(
+            self._contextos.values()
+        )
+
+        if tipo is None:
+            return contextos
+
+        return [
+            contexto
+            for contexto in contextos
+            if contexto.tipo == tipo
+        ]
+
+    def remover(
+        self,
+        contexto_id: str,
+    ) -> bool:
+        if contexto_id not in self._contextos:
+            return False
+
+        del self._contextos[contexto_id]
+        return True
+
+    def limpar(self) -> None:
+        self._contextos.clear()
+from dataclasses import dataclass, field
+from typing import Any
+
+
+ESTADOS_PERMISSAO_VALIDOS = {
+    "pendente",
+    "autorizada",
+    "negada",
+    "aguardando_confirmacao",
+}
+
+
+@dataclass
+class PermissionContract:
+    contexto_id: str
+    ferramenta_id: str
+    estado: str = "pendente"
+    risco: str = "baixo"
+    requer_confirmacao: bool = False
+    motivo: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def validar(self) -> tuple[bool, str]:
+        if not self.contexto_id.strip():
+            return False, (
+                "A permissÃ£o precisa possuir um contexto_id."
+            )
+
+        if not self.ferramenta_id.strip():
+            return False, (
+                "A permissÃ£o precisa possuir um ferramenta_id."
+            )
+
+        if self.estado not in ESTADOS_PERMISSAO_VALIDOS:
+            return False, (
+                f"Estado de permissÃ£o invÃ¡lido: "
+                f"'{self.estado}'."
+            )
+
+        if not self.risco.strip():
+            return False, (
+                "A permissÃ£o precisa possuir um nÃ­vel de risco."
+            )
+
+        if not isinstance(
+            self.requer_confirmacao,
+            bool,
+        ):
+            return False, (
+                "requer_confirmacao deve ser booleano."
+            )
+
+        if not isinstance(self.metadata, dict):
+            return False, (
+                "Os metadados da permissÃ£o devem ser um objeto."
+            )
+
+        return True, ""
+from app.permissions.permission_contract import PermissionContract
+from app.permissions.permission_registry import PermissionRegistry
+from app.tools.tool_contract import ToolContract
+from app.tools.tool_permissions import ToolPermissionPolicy
+
+
+class PermissionEngine:
+    def __init__(
+        self,
+        policy: ToolPermissionPolicy,
+        registry: PermissionRegistry | None = None,
+    ):
+        self.policy = policy
+        self.registry = registry or PermissionRegistry()
+
+    def avaliar(
+        self,
+        contexto_id: str,
+        ferramenta: ToolContract,
+    ) -> PermissionContract:
+
+        if not contexto_id.strip():
+            permissao = PermissionContract(
+                contexto_id=contexto_id,
+                ferramenta_id=ferramenta.id,
+                estado="negada",
+                risco=ferramenta.risco,
+                requer_confirmacao=ferramenta.requer_confirmacao,
+                motivo="Contexto de execuÃ§Ã£o nÃ£o informado.",
+            )
+
+            self._registrar(permissao)
+            return permissao
+
+        permitida = self.policy.permitir(
+            contexto_id,
+            ferramenta,
+        )
+
+        if not permitida:
+            permissao = PermissionContract(
+                contexto_id=contexto_id,
+                ferramenta_id=ferramenta.id,
+                estado="negada",
+                risco=ferramenta.risco,
+                requer_confirmacao=ferramenta.requer_confirmacao,
+                motivo=(
+                    "A ferramenta nÃ£o estÃ¡ autorizada "
+                    "para este contexto."
+                ),
+            )
+
+            self._registrar(permissao)
+            return permissao
+
+        if ferramenta.requer_confirmacao:
+            permissao = PermissionContract(
+                contexto_id=contexto_id,
+                ferramenta_id=ferramenta.id,
+                estado="aguardando_confirmacao",
+                risco=ferramenta.risco,
+                requer_confirmacao=True,
+                motivo=(
+                    "A ferramenta exige confirmaÃ§Ã£o "
+                    "antes da execuÃ§Ã£o."
+                ),
+            )
+
+            self._registrar(permissao)
+            return permissao
+
+        permissao = PermissionContract(
+            contexto_id=contexto_id,
+            ferramenta_id=ferramenta.id,
+            estado="autorizada",
+            risco=ferramenta.risco,
+            requer_confirmacao=False,
+            motivo="Ferramenta autorizada para execuÃ§Ã£o.",
+        )
+
+        self._registrar(permissao)
+        return permissao
+
+    def confirmar(
+        self,
+        permissao: PermissionContract,
+    ) -> PermissionContract:
+
+        if permissao.estado != "aguardando_confirmacao":
+            raise ValueError(
+                "Somente permissÃµes aguardando confirmaÃ§Ã£o "
+                "podem ser confirmadas."
+            )
+
+        permissao.estado = "autorizada"
+        permissao.motivo = (
+            "ExecuÃ§Ã£o confirmada explicitamente."
+        )
+
+        self._registrar(permissao)
+
+        return permissao
+
+    def _registrar(
+        self,
+        permissao: PermissionContract,
+    ) -> None:
+        chave_existente = self.registry.obter(
+            permissao.contexto_id,
+            permissao.ferramenta_id,
+        )
+
+        if chave_existente is not None:
+            self.registry.remover(
+                permissao.contexto_id,
+                permissao.ferramenta_id,
+            )
+
+        self.registry.registrar(permissao)
+from app.permissions.permission_contract import PermissionContract
+
+
+class PermissionRegistry:
+    def __init__(self):
+        self._permissoes: dict[
+            str,
+            PermissionContract,
+        ] = {}
+
+    def registrar(
+        self,
+        permissao: PermissionContract,
+    ) -> None:
+        valido, erro = permissao.validar()
+
+        if not valido:
+            raise ValueError(
+                f"PermissÃ£o invÃ¡lida: {erro}"
+            )
+
+        chave = self._gerar_chave(
+            permissao.contexto_id,
+            permissao.ferramenta_id,
+        )
+
+        if chave in self._permissoes:
+            raise ValueError(
+                "A permissÃ£o jÃ¡ estÃ¡ registrada."
+            )
+
+        self._permissoes[chave] = permissao
+
+    def obter(
+        self,
+        contexto_id: str,
+        ferramenta_id: str,
+    ) -> PermissionContract | None:
+        chave = self._gerar_chave(
+            contexto_id,
+            ferramenta_id,
+        )
+
+        return self._permissoes.get(chave)
+
+    def existe(
+        self,
+        contexto_id: str,
+        ferramenta_id: str,
+    ) -> bool:
+        return (
+            self.obter(
+                contexto_id,
+                ferramenta_id,
+            )
+            is not None
+        )
+
+    def listar(
+        self,
+        contexto_id: str | None = None,
+    ) -> list[PermissionContract]:
+        permissoes = list(
+            self._permissoes.values()
+        )
+
+        if contexto_id is None:
+            return permissoes
+
+        return [
+            permissao
+            for permissao in permissoes
+            if permissao.contexto_id == contexto_id
+        ]
+
+    def remover(
+        self,
+        contexto_id: str,
+        ferramenta_id: str,
+    ) -> bool:
+        chave = self._gerar_chave(
+            contexto_id,
+            ferramenta_id,
+        )
+
+        if chave not in self._permissoes:
+            return False
+
+        del self._permissoes[chave]
+        return True
+
+    def limpar(self) -> None:
+        self._permissoes.clear()
+
+    def _gerar_chave(
+        self,
+        contexto_id: str,
+        ferramenta_id: str,
+    ) -> str:
+        return f"{contexto_id}:{ferramenta_id}"
+from app.permissions.permission_context import PermissionContext
+from app.permissions.permission_context_registry import PermissionContextRegistry
+from app.permissions.permission_contract import PermissionContract
+from app.permissions.permission_engine import PermissionEngine
+from app.permissions.permission_registry import PermissionRegistry
+from app.tools.tool_contract import ToolContract
+
+
+class PermissionService:
+    def __init__(
+        self,
+        engine: PermissionEngine,
+        permission_registry: PermissionRegistry,
+        context_registry: PermissionContextRegistry,
+    ):
+        self.engine = engine
+        self.permission_registry = permission_registry
+        self.context_registry = context_registry
+
+    def registrar_contexto(
+        self,
+        contexto: PermissionContext,
+    ) -> None:
+        self.context_registry.registrar(contexto)
+
+    def avaliar(
+        self,
+        contexto_id: str,
+        ferramenta: ToolContract,
+    ) -> PermissionContract:
+
+        contexto = self.context_registry.obter(
+            contexto_id
+        )
+
+        if contexto is None:
+            permissao = PermissionContract(
+                contexto_id=contexto_id,
+                ferramenta_id=ferramenta.id,
+                estado="negada",
+                risco=ferramenta.risco,
+                requer_confirmacao=ferramenta.requer_confirmacao,
+                motivo=(
+                    "Contexto de permissÃ£o nÃ£o registrado."
+                ),
+            )
+
+            self._registrar_permissao(permissao)
+
+            return permissao
+
+        permissao = self.engine.avaliar(
+            contexto.id,
+            ferramenta,
+        )
+
+        return permissao
+
+    def confirmar(
+        self,
+        contexto_id: str,
+        ferramenta_id: str,
+    ) -> PermissionContract:
+
+        permissao = self.permission_registry.obter(
+            contexto_id,
+            ferramenta_id,
+        )
+
+        if permissao is None:
+            raise ValueError(
+                "PermissÃ£o nÃ£o encontrada."
+            )
+
+        return self.engine.confirmar(
+            permissao
+        )
+
+    def obter_permissao(
+        self,
+        contexto_id: str,
+        ferramenta_id: str,
+    ) -> PermissionContract | None:
+        return self.permission_registry.obter(
+            contexto_id,
+            ferramenta_id,
+        )
+
+    def _registrar_permissao(
+        self,
+        permissao: PermissionContract,
+    ) -> None:
+        existente = self.permission_registry.obter(
+            permissao.contexto_id,
+            permissao.ferramenta_id,
+        )
+
+        if existente is not None:
+            self.permission_registry.remover(
+                permissao.contexto_id,
+                permissao.ferramenta_id,
+            )
+
+        self.permission_registry.registrar(
+            permissao
+        )
+
+from app.planning.planner_contract import (
+    PlanStep,
+    PlannerContract,
+)
+
+
+class Planner:
+    """
+    Planner determinÃ­stico inicial.
+
+    ResponsÃ¡vel por transformar uma solicitaÃ§Ã£o
+    em uma estrutura de etapas.
+
+    NÃ£o executa ferramentas nem modelos.
+    """
+
+    def planejar(
+        self,
+        objetivo: str,
+        etapas: list[dict] | None = None,
+    ) -> PlannerContract:
+
+        objetivo = objetivo.strip()
+
+        if not objetivo:
+            return PlannerContract(
+                objetivo="",
+                etapas=[],
+                metadata={
+                    "planner_version": "1.0",
+                    "deterministico": True,
+                },
+            )
+
+        etapas_normalizadas = []
+
+        for indice, dados in enumerate(etapas or [], start=1):
+            etapas_normalizadas.append(
+                PlanStep(
+                    id=dados.get(
+                        "id",
+                        f"etapa_{indice}"
+                    ),
+                    descricao=dados.get(
+                        "descricao",
+                        ""
+                    ),
+                    ferramenta=dados.get("ferramenta"),
+                    argumentos=dados.get(
+                        "argumentos",
+                        {}
+                    ),
+                )
+            )
+
+        plano = PlannerContract(
+            objetivo=objetivo,
+            etapas=etapas_normalizadas,
+            metadata={
+                "planner_version": "1.0",
+                "deterministico": True,
+                "quantidade_etapas": len(etapas_normalizadas),
+            },
+        )
+
+        valido, erro = plano.validar()
+
+        if not valido:
+            raise ValueError(
+                f"Plano invÃ¡lido: {erro}"
+            )
+
+        return plano
+from dataclasses import dataclass, field
+from typing import Any
+
+
+ESTADOS_ETAPA_VALIDOS = {
+    "pendente",
+    "executando",
+    "concluida",
+    "falhou",
+    "cancelada",
+}
+
+
+@dataclass
+class PlanStep:
+    id: str
+    descricao: str
+    estado: str = "pendente"
+    ferramenta: str | None = None
+    argumentos: dict[str, Any] = field(default_factory=dict)
+    resultado: Any = None
+    erro: str | None = None
+
+
+@dataclass
+class PlannerContract:
+    objetivo: str
+    etapas: list[PlanStep] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def validar(self) -> tuple[bool, str]:
+        if not self.objetivo.strip():
+            return False, "O plano precisa possuir um objetivo."
+
+        ids: set[str] = set()
+
+        for etapa in self.etapas:
+            if not etapa.id:
+                return False, "Toda etapa precisa possuir um ID."
+
+            if etapa.id in ids:
+                return False, (
+                    f"A etapa '{etapa.id}' estÃ¡ duplicada."
+                )
+
+            ids.add(etapa.id)
+
+            if not etapa.descricao.strip():
+                return False, (
+                    f"A etapa '{etapa.id}' precisa possuir uma descriÃ§Ã£o."
+                )
+
+            if etapa.estado not in ESTADOS_ETAPA_VALIDOS:
+                return False, (
+                    f"A etapa '{etapa.id}' possui estado invÃ¡lido: "
+                    f"'{etapa.estado}'."
+                )
+
+        return True, ""
+
+from app.ai.model_registry import ModelRegistry, criar_registry_padrao
+from app.routing.router_contract import RouterContract
+
+
+ROTAS_VALIDAS = {
+    "simples",
+    "codigo",
+    "complexo",
+}
+
+MODELO_FALLBACK = "llama3.2:1b"
+
+
+class Router:
+    """
+    Roteador central do Agent Core.
+
+    O Router decide qual fluxo deve processar
+    uma solicitação, mas não executa o modelo.
+
+    A seleção do modelo é feita através do
+    ModelRegistry.
+    """
+
+    def __init__(
+        self,
+        model_registry: ModelRegistry | None = None,
+        modelo_simples: str = MODELO_FALLBACK,
+        modelo_codigo: str = MODELO_FALLBACK,
+        modelo_complexo: str = MODELO_FALLBACK,
+    ):
+        self.model_registry = (
+            model_registry
+            or criar_registry_padrao()
+        )
+
+        self.modelo_simples = modelo_simples
+        self.modelo_codigo = modelo_codigo
+        self.modelo_complexo = modelo_complexo
+
+    # ==========================================================
+    # API PRINCIPAL
+    # ==========================================================
+
+    def rotear(
+        self,
+        texto: str,
+        skill_id: str | None = None,
+    ) -> RouterContract:
+
+        texto_normalizado = self._normalizar(
+            texto
+        )
+
+        if not texto_normalizado:
+            return self._criar_resultado(
+                rota="simples",
+                skill_id=skill_id,
+                motivo="Mensagem vazia ou sem conteúdo.",
+                confianca=1.0,
+            )
+
+        rota, confianca, motivo = (
+            self._determinar_rota(
+                texto_normalizado
+            )
+        )
+
+        return self._criar_resultado(
+            rota=rota,
+            skill_id=skill_id,
+            motivo=motivo,
+            confianca=confianca,
+        )
+
+    # ==========================================================
+    # NORMALIZAÇÃO
+    # ==========================================================
+
+    def _normalizar(
+        self,
+        texto: str,
+    ) -> str:
+
+        if not isinstance(texto, str):
+            return ""
+
+        return texto.strip().lower()
+
+    # ==========================================================
+    # DETERMINAÇÃO DA ROTA
+    # ==========================================================
+
+    def _determinar_rota(
+        self,
+        texto: str,
+    ) -> tuple[str, float, str]:
+
+        if self._parece_codigo(texto):
+            return (
+                "codigo",
+                0.9,
+                "A solicitação aparenta envolver programação.",
+            )
+
+        if self._parece_complexo(texto):
+            return (
+                "complexo",
+                0.7,
+                "A solicitação aparenta exigir processamento mais complexo.",
+            )
+
+        return (
+            "simples",
+            0.8,
+            "Solicitação geral sem indicação de complexidade elevada.",
+        )
+
+    # ==========================================================
+    # RESULTADO
+    # ==========================================================
+
+    def _criar_resultado(
+        self,
+        rota: str,
+        skill_id: str | None,
+        motivo: str,
+        confianca: float,
+    ) -> RouterContract:
+
+        if rota not in ROTAS_VALIDAS:
+            raise ValueError(
+                f"Rota inválida: '{rota}'."
+            )
+
+        modelo, fallback_utilizado = (
+            self._modelo_da_rota(rota)
+        )
+
+        metadata = {
+            "router_version": "3.0",
+            "deterministico": True,
+            "model_registry": True,
+            "fallback_utilizado": fallback_utilizado,
+        }
+
+        return RouterContract(
+            rota=rota,
+            modelo=modelo.id,
+            skill_id=skill_id,
+            motivo=motivo,
+            confianca=confianca,
+            metadata=metadata,
+        )
+
+    # ==========================================================
+    # MODELO DA ROTA
+    # ==========================================================
+
+    def _modelo_da_rota(
+        self,
+        rota: str,
+    ):
+        modelos = {
+            "simples": self.modelo_simples,
+            "codigo": self.modelo_codigo,
+            "complexo": self.modelo_complexo,
+        }
+
+        try:
+            modelo_id = modelos[rota]
+        except KeyError:
+            raise ValueError(
+                f"Não existe modelo configurado "
+                f"para a rota '{rota}'."
+            )
+
+        return self.model_registry.selecionar(
+            modelo_id=modelo_id,
+            fallback_id=MODELO_FALLBACK,
+        )
+
+    # ==========================================================
+    # DETECÇÃO DE CÓDIGO
+    # ==========================================================
+
+    def _parece_codigo(
+        self,
+        texto: str,
+    ) -> bool:
+
+        indicadores = (
+            "python",
+            "java",
+            "javascript",
+            "typescript",
+            "kotlin",
+            "php",
+            "c++",
+            "c#",
+            "html",
+            "css",
+            "sql",
+            "debug",
+            "debugar",
+            "erro no código",
+            "erro no codigo",
+            "stack trace",
+            "exception",
+            "traceback",
+            "função",
+            "funcao",
+            "classe",
+            "método",
+            "metodo",
+            "api",
+            "endpoint",
+            "fastapi",
+            "android",
+            "gradle",
+            "docker",
+            "git",
+        )
+
+        return any(
+            indicador in texto
+            for indicador in indicadores
+        )
+
+    # ==========================================================
+    # DETECÇÃO DE COMPLEXIDADE
+    # ==========================================================
+
+    def _parece_complexo(
+        self,
+        texto: str,
+    ) -> bool:
+
+        indicadores = (
+            "arquitetura",
+            "refatore todo",
+            "refatorar todo",
+            "analise profundamente",
+            "analisar profundamente",
+            "projeto completo",
+            "planeje uma arquitetura",
+            "planejar uma arquitetura",
+            "compare detalhadamente",
+            "investigue",
+            "pesquisa completa",
+            "multi etapa",
+            "multi-etapa",
+        )
+
+        return any(
+            indicador in texto
+            for indicador in indicadores
+        )
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class RouterContract:
+    """
+    Resultado normalizado da decisÃ£o do Router.
+
+    O Router nÃ£o executa a solicitaÃ§Ã£o.
+    Ele apenas determina qual fluxo deve processÃ¡-la.
+    """
+
+    rota: str
+
+    modelo: str | None = None
+
+    skill_id: str | None = None
+
+    motivo: str = ""
+
+    confianca: float | None = None
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+from dataclasses import dataclass
+from typing import Any
+
+import yaml
+
+
+@dataclass
+class SkillFrontmatter:
+    id: str | None = None
+    nome: str | None = None
+    icone: str = ""
+    tipo: str = "skill"
+    modelo: str | None = None
+    temperatura: float = 0.5
+    ferramentas_permitidas: list[str] | None = None
+
+
+def ler_frontmatter(conteudo: str) -> tuple[dict[str, Any], str]:
+    """
+    Extrai o Frontmatter YAML de uma Skill Markdown.
+
+    Retorna:
+        (configuracoes, corpo)
+    """
+
+    conteudo = conteudo.strip()
+
+    if not conteudo.startswith("---"):
+        return {}, conteudo
+
+    partes = conteudo.split("---", 2)
+
+    if len(partes) != 3:
+        return {}, conteudo
+
+    try:
+        configuracoes = yaml.safe_load(partes[1]) or {}
+
+        if not isinstance(configuracoes, dict):
+            configuracoes = {}
+
+        corpo = partes[2].strip()
+
+        return configuracoes, corpo
+
+    except yaml.YAMLError as erro:
+        print(
+            f"Erro ao interpretar Frontmatter YAML: {erro}"
+        )
+        return {}, conteudo
+
+
+def normalizar_ferramentas(valor: Any) -> list[str]:
+    """
+    Garante que ferramentas_permitidas seja uma lista
+    limpa de strings Ãºnicas.
+    """
+
+    if valor is None:
+        return []
+
+    if isinstance(valor, str):
+        valor = valor.strip()
+
+        return [valor] if valor else []
+
+    if not isinstance(valor, list):
+        return []
+
+    resultado = []
+
+    for item in valor:
+        if not isinstance(item, str):
+            continue
+
+        item = item.strip()
+
+        if item and item not in resultado:
+            resultado.append(item)
+
+    return resultado
+
+
+def criar_configuracao(
+    configuracoes: dict[str, Any]
+) -> SkillFrontmatter:
+
+    ferramentas = normalizar_ferramentas(
+        configuracoes.get(
+            "ferramentas_permitidas",
+            []
+        )
+    )
+
+    temperatura = configuracoes.get(
+        "temperatura",
+        0.5
+    )
+
+    try:
+        temperatura = float(temperatura)
+    except (TypeError, ValueError):
+        temperatura = 0.5
+
+    return SkillFrontmatter(
+        id=(
+            str(configuracoes["id"]).strip()
+            if configuracoes.get("id") is not None
+            else None
+        ),
+        nome=(
+            str(configuracoes["nome"]).strip()
+            if configuracoes.get("nome") is not None
+            else None
+        ),
+        icone=str(
+            configuracoes.get("icone", "")
+        ),
+        tipo=str(
+            configuracoes.get("tipo", "skill")
+        ),
+        modelo=(
+            str(configuracoes["modelo"]).strip()
+            if configuracoes.get("modelo") is not None
+            else None
+        ),
+        temperatura=temperatura,
+        ferramentas_permitidas=ferramentas,
+    )
+from pathlib import Path
+from dataclasses import dataclass
+
+
+@dataclass
+class SkillArquivo:
+    id: str
+    caminho: Path
+    conteudo: str
+
+
+IGNORAR_DIRETORIOS = {
+    "assets",
+    "images",
+    "docs",
+    "__pycache__",
+}
+
+
+class SkillLoader:
+    def __init__(self, skills_dir: Path):
+        self.skills_dir = skills_dir
+
+    def descobrir_arquivos(self) -> list[Path]:
+        if not self.skills_dir.exists():
+            return []
+
+        arquivos = []
+
+        for caminho in self.skills_dir.rglob("*"):
+            if not caminho.is_file():
+                continue
+
+            if caminho.suffix.lower() not in {".md", ".txt"}:
+                continue
+
+            if any(
+                parte.lower() in IGNORAR_DIRETORIOS
+                for parte in caminho.relative_to(self.skills_dir).parts[:-1]
+            ):
+                continue
+
+            arquivos.append(caminho)
+
+        return sorted(
+            arquivos,
+            key=lambda caminho: str(caminho).casefold()
+        )
+
+    def identificar_id(self, caminho: Path) -> str:
+        # Futuramente:
+        # skills/minha_skill/SKILL.md -> minha_skill
+        if caminho.name.lower() == "skill.md":
+            return caminho.parent.name
+
+        # Compatibilidade atual:
+        # skills/minha_skill.md -> minha_skill
+        return caminho.stem
+
+    def carregar_arquivo(self, caminho: Path) -> SkillArquivo:
+        conteudo = caminho.read_text(
+            encoding="utf-8"
+        )
+
+        return SkillArquivo(
+            id=self.identificar_id(caminho),
+            caminho=caminho,
+            conteudo=conteudo,
+        )
+
+    def carregar_todas(self) -> list[SkillArquivo]:
+        skills = []
+
+        for caminho in self.descobrir_arquivos():
+            try:
+                skills.append(
+                    self.carregar_arquivo(caminho)
+                )
+            except (OSError, UnicodeError):
+                continue
+
+        return skills
+
+from typing import Any
+
+from app.permissions.permission_service import PermissionService
+from app.tools.tool_contract import ToolContract
+from app.tools.tool_validator import validar_argumentos
+
+
+class ExecutionGuard:
+    """
+    Barreira final entre uma solicitaÃ§Ã£o de execuÃ§Ã£o
+    e o handler real de uma ferramenta.
+    """
+
+    def __init__(
+        self,
+        permission_service: PermissionService,
+    ):
+        self.permission_service = permission_service
+
+    def executar(
+        self,
+        contexto_id: str,
+        ferramenta: ToolContract,
+        argumentos: dict[str, Any],
+    ) -> Any:
+        """
+        Executa uma ferramenta somente se todas as
+        verificaÃ§Ãµes de seguranÃ§a forem aprovadas.
+        """
+
+        permissao = self.permission_service.avaliar(
+            contexto_id=contexto_id,
+            ferramenta=ferramenta,
+        )
+
+        if permissao.estado == "negada":
+            return (
+                "Erro de permissÃ£o: "
+                f"{permissao.motivo}"
+            )
+
+        if (
+            permissao.estado
+            == "aguardando_confirmacao"
+        ):
+            return (
+                f"A ferramenta '{ferramenta.id}' "
+                "requer confirmaÃ§Ã£o antes da execuÃ§Ã£o."
+            )
+
+        valido, erro = validar_argumentos(
+            ferramenta,
+            argumentos,
+        )
+
+        if not valido:
+            return (
+                f"Erro de argumentos: {erro}"
+            )
+
+        if ferramenta.handler is None:
+            return (
+                f"A ferramenta '{ferramenta.id}' "
+                "nÃ£o possui handler genÃ©rico."
+            )
+
+        try:
+            return ferramenta.handler(
+                argumentos
+            )
+
+        except Exception as exc:
+            return (
+                f"Erro ao executar a ferramenta "
+                f"'{ferramenta.id}': {exc}"
+            )
+import os
+import json
+import subprocess
+import pyautogui
+import base64
+import requests
+
+from io import BytesIO
+from datetime import datetime
+from abc import ABC, abstractmethod
+
+
+# ============================================================
+# CONFIGURAÃ‡ÃƒO DO COMPUTADOR
+# ============================================================
+
+# ConfiguraÃ§Ã£o atual do PyAutoGUI.
+pyautogui.FAILSAFE = False
+
+
+# ============================================================
+# COMANDOS AUTORIZADOS DO COMPUTADOR
+# ============================================================
+
+CAMINHO_COMANDOS = "comandos_pc.json"
+
+
+def carregar_comandos_pc() -> dict:
+    """
+    Carrega as aÃ§Ãµes autorizadas do computador a partir
+    do arquivo comandos_pc.json.
+    """
+
+    if os.path.exists(CAMINHO_COMANDOS):
+
+        try:
+            with open(
+                CAMINHO_COMANDOS,
+                "r",
+                encoding="utf-8"
+            ) as arquivo:
+
+                return json.load(arquivo)
+
+        except Exception:
+            pass
+
+    return {}
+
+
+ACOES_PERMITIDAS = carregar_comandos_pc()
+
+CHAVES_ACOES = (
+    list(ACOES_PERMITIDAS.keys())
+    if ACOES_PERMITIDAS
+    else ["nenhum_comando_configurado"]
+)
+
+
+# ============================================================
+# CONTRATO BASE DAS FERRAMENTAS
+# ============================================================
+
+class FerramentaBase(ABC):
+    """
+    Interface base para todas as ferramentas do Agent Core.
+
+    Cada ferramenta deve implementar:
+
+        executar(argumentos: dict) -> str
+    """
+
+    @abstractmethod
+    def executar(
+        self,
+        argumentos: dict
+    ) -> str:
+        pass
+
+
+# ============================================================
+# FERRAMENTA â€” HORA
+# ============================================================
+
+class FerramentaHora(FerramentaBase):
+
+    def executar(
+        self,
+        argumentos: dict
+    ) -> str:
+
+        agora = datetime.now().strftime(
+            "%A, %d de %B de %Y Ã s %H:%M:%S"
+        )
+
+        return (
+            "A data e hora exata do sistema "
+            f"neste momento Ã©: {agora}"
+        )
+
+
+# ============================================================
+# FERRAMENTA â€” CALCULADORA
+# ============================================================
+
+class FerramentaCalculadora(FerramentaBase):
+
+    def executar(
+        self,
+        argumentos: dict
+    ) -> str:
+
+        expressao = argumentos.get(
+            "expressao",
+            ""
+        )
+
+        # MantÃ©m a sanitizaÃ§Ã£o existente.
+        expressao_limpa = "".join(
+            caractere
+            for caractere in expressao
+            if caractere in "0123456789+-*/(). "
+        )
+
+        try:
+
+            resultado = eval(
+                expressao_limpa
+            )
+
+            return (
+                "O resultado matemÃ¡tico da "
+                f"expressÃ£o {expressao_limpa} Ã©: "
+                f"{str(resultado)}"
+            )
+
+        except Exception as erro:
+
+            return (
+                "Erro ao calcular a expressÃ£o "
+                f"'{expressao_limpa}': {erro}"
+            )
+
+
+# ============================================================
+# FERRAMENTA â€” LEITOR DE ARQUIVOS
+# ============================================================
+
+class FerramentaLerArquivo(FerramentaBase):
+
+    def executar(
+        self,
+        argumentos: dict
+    ) -> str:
+
+        nome_arquivo = argumentos.get(
+            "nome_arquivo",
+            ""
+        )
+
+        caminho_completo = os.path.join(
+            "projetos",
+            nome_arquivo
+        )
+
+        try:
+
+            if os.path.exists(
+                caminho_completo
+            ):
+
+                with open(
+                    caminho_completo,
+                    "r",
+                    encoding="utf-8"
+                ) as arquivo:
+
+                    resultado = arquivo.read()
+
+                # ProteÃ§Ã£o do contexto do modelo.
+                if len(resultado) > 6000:
+
+                    return (
+                        resultado[:6000]
+                        + "\n\n"
+                        "[ConteÃºdo truncado por seguranÃ§a. "
+                        "O arquivo Ã© muito grande.]"
+                    )
+
+                return resultado
+
+            return (
+                f"Erro: Arquivo '{nome_arquivo}' "
+                "nÃ£o encontrado. "
+                "Verifique o nome ou coloque o arquivo "
+                "na pasta projetos/."
+            )
+
+        except Exception as erro:
+
+            return (
+                f"Erro de leitura do arquivo "
+                f"'{nome_arquivo}': {erro}"
+            )
+
+
+# ============================================================
+# FERRAMENTA â€” CONTROLE DO COMPUTADOR
+# ============================================================
+
+class FerramentaControlarPC(FerramentaBase):
+
+    def __init__(
+        self,
+        acoes_permitidas: dict
+    ):
+
+        self.__acoes = acoes_permitidas
+
+    def executar(
+        self,
+        argumentos: dict
+    ) -> str:
+
+        acao = argumentos.get(
+            "acao",
+            ""
+        )
+
+        if acao not in self.__acoes:
+
+            return (
+                f"Erro: A aÃ§Ã£o '{acao}' "
+                "foi bloqueada por seguranÃ§a "
+                "ou nÃ£o existe no arquivo json."
+            )
+
+        try:
+
+            os.system(
+                self.__acoes[acao]
+            )
+
+            return (
+                f"Sucesso: A aÃ§Ã£o '{acao}' "
+                "foi executada com Ãªxito "
+                "na mÃ¡quina fÃ­sica."
+            )
+
+        except Exception as erro:
+
+            return (
+                "Erro interno do sistema operativo "
+                f"ao tentar executar '{acao}': {erro}"
+            )
+
+
+# ============================================================
+# FERRAMENTA â€” TERMINAL
+# ============================================================
+
+class FerramentaTerminal(FerramentaBase):
+
+    def executar(
+        self,
+        argumentos: dict
+    ) -> str:
+
+        comando = argumentos.get(
+            "comando",
+            ""
+        )
+
+        try:
+
+            resultado = subprocess.run(
+                comando,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            saida = resultado.stdout.strip()
+            erro = resultado.stderr.strip()
+
+            if erro and not saida:
+
+                return (
+                    "Comando executado com "
+                    "cÃ³digo de erro:\n"
+                    f"{erro}"
+                )
+
+            elif erro and saida:
+
+                return (
+                    f"SaÃ­da:\n{saida}\n\n"
+                    "Erros/Avisos gerados:\n"
+                    f"{erro}"
+                )
+
+            elif saida:
+
+                if len(saida) > 4000:
+
+                    return (
+                        "SaÃ­da do terminal "
+                        "(truncada por seguranÃ§a):\n"
+                        f"{saida[:4000]}..."
+                    )
+
+                return (
+                    f"SaÃ­da do terminal:\n"
+                    f"{saida}"
+                )
+
+            else:
+
+                return (
+                    f"O comando '{comando}' "
+                    "foi executado com sucesso, "
+                    "mas nÃ£o retornou texto."
+                )
+
+        except subprocess.TimeoutExpired:
+
+            return (
+                "Erro: O comando demorou mais "
+                "de 30 segundos e foi interrompido."
+            )
+
+        except Exception as erro:
+
+            return (
+                "Erro fatal ao tentar usar "
+                f"o terminal: {erro}"
+            )
+
+
+# ============================================================
+# FERRAMENTA â€” INTERAÃ‡ÃƒO COM A TELA
+# ============================================================
+
+class FerramentaInteragirEcra(FerramentaBase):
+
+    def executar(
+        self,
+        argumentos: dict
+    ) -> str:
+
+        acao = argumentos.get(
+            "acao"
+        )
+
+        try:
+
+            # ------------------------------------------------
+            # Digitar texto
+            # ------------------------------------------------
+
+            if acao == "escrever":
+
+                texto = argumentos.get(
+                    "texto",
+                    ""
+                )
+
+                pyautogui.write(
+                    texto,
+                    interval=0.05
+                )
+
+                return (
+                    f"Texto '{texto}' "
+                    "digitado fisicamente com sucesso."
+                )
+
+            # ------------------------------------------------
+            # Pressionar tecla
+            # ------------------------------------------------
+
+            elif acao == "tecla":
+
+                tecla = argumentos.get(
+                    "texto",
+                    "enter"
+                )
+
+                pyautogui.press(
+                    tecla
+                )
+
+                return (
+                    f"Tecla '{tecla}' "
+                    "pressionada fisicamente."
+                )
+
+            # ------------------------------------------------
+            # Clicar
+            # ------------------------------------------------
+
+            elif acao == "clicar":
+
+                largura, altura = (
+                    pyautogui.size()
+                )
+
+                pyautogui.click(
+                    largura / 2,
+                    altura / 2
+                )
+
+                return (
+                    "Clique realizado no "
+                    "centro da tela."
+                )
+
+            # ------------------------------------------------
+            # Analisar tela
+            # ------------------------------------------------
+
+            elif acao == "analisar_tela":
+
+                screenshot = (
+                    pyautogui.screenshot()
+                )
+
+                buffered = BytesIO()
+
+                screenshot.save(
+                    buffered,
+                    format="JPEG",
+                    quality=80
+                )
+
+                imagem_base64 = (
+                    base64.b64encode(
+                        buffered.getvalue()
+                    ).decode("utf-8")
+                )
+
+                payload = {
+                    "model": "llava",
+                    "prompt": (
+                        "Descreva o que estÃ¡ visÃ­vel "
+                        "na tela de forma objetiva. "
+                        "Quais janelas ou programas "
+                        "estÃ£o abertos?"
+                    ),
+                    "images": [
+                        imagem_base64
+                    ],
+                    "stream": False
+                }
+
+                resposta = requests.post(
+                    "http://127.0.0.1:11434/api/generate",
+                    json=payload,
+                    timeout=120
+                )
+
+                if resposta.status_code == 200:
+
+                    dados = resposta.json()
+
+                    return (
+                        "VisÃ£o da Tela: "
+                        f"{dados.get('response', '')}"
+                    )
+
+                return (
+                    "Falha na visÃ£o. "
+                    f"Status: {resposta.status_code}"
+                )
+
+            # ------------------------------------------------
+            # AÃ§Ã£o desconhecida
+            # ------------------------------------------------
+
+            else:
+
+                return (
+                    f"AÃ§Ã£o '{acao}' "
+                    "nÃ£o reconhecida pela "
+                    "ferramenta de tela."
+                )
+
+        except Exception as erro:
+
+            return (
+                "Erro fÃ­sico ao interagir "
+                f"com a interface grÃ¡fica: {erro}"
+            )
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+
+@dataclass
+class ToolContract:
+    id: str
+    nome: str
+    descricao: str
+    categoria: str = "geral"
+    risco: str = "baixo"
+    argumentos: dict[str, Any] = field(default_factory=dict)
+    requer_confirmacao: bool = False
+    handler: Callable[[dict], Any] | None = None
+from app.tools.tool_contract import ToolContract
+
+
+class ToolPermissionPolicy:
+    def __init__(self):
+        self._permissoes: dict[str, set[str]] = {}
+
+    def definir_permissoes(
+        self,
+        contexto_id: str,
+        ferramentas: list[str],
+    ) -> None:
+        self._permissoes[contexto_id] = set(ferramentas)
+
+    def permitir(
+        self,
+        contexto_id: str,
+        ferramenta: ToolContract,
+    ) -> bool:
+        ferramentas_permitidas = self._permissoes.get(
+            contexto_id,
+            set(),
+        )
+
+        return ferramenta.id in ferramentas_permitidas
+
+    def listar_permitidas(
+        self,
+        contexto_id: str,
+    ) -> list[str]:
+        return sorted(
+            self._permissoes.get(contexto_id, set())
+        )
+
+    def remover_contexto(self, contexto_id: str) -> None:
+        self._permissoes.pop(contexto_id, None)
+
+    def limpar(self) -> None:
+        self._permissoes.clear()
+
+    def carregar_skill(
+        self,
+        contexto_id: str,
+        ferramentas_permitidas: list[str] | None,
+    ) -> None:
+        self.definir_permissoes(
+            contexto_id,
+            ferramentas_permitidas or [],
+        )
+from app.tools.tool_contract import ToolContract
+from app.tools.tools import (
+    FerramentaHora,
+    FerramentaCalculadora,
+    FerramentaLerArquivo,
+    FerramentaControlarPC,
+    FerramentaTerminal,
+    FerramentaInteragirEcra,
+)
+
+
+class ToolRegistry:
+    """
+    Registro central de todas as ferramentas disponÃ­veis
+    no Agent Core.
+
+    Responsabilidades:
+    - registrar ferramentas
+    - localizar ferramentas
+    - listar ferramentas
+    - remover ferramentas
+    - gerar schemas para o Ollama
+    """
+
+    def __init__(self):
+        self._ferramentas: dict[str, ToolContract] = {}
+
+    # ==========================================================
+    # REGISTRO
+    # ==========================================================
+
+    def registrar(
+        self,
+        ferramenta: ToolContract
+    ) -> None:
+
+        if not ferramenta.id:
+            raise ValueError(
+                "A ferramenta precisa possuir um ID."
+            )
+
+        if ferramenta.id in self._ferramentas:
+            raise ValueError(
+                f"A ferramenta '{ferramenta.id}' "
+                "jÃ¡ estÃ¡ registrada."
+            )
+
+        self._ferramentas[ferramenta.id] = ferramenta
+
+    # ==========================================================
+    # CONSULTA
+    # ==========================================================
+
+    def obter(
+        self,
+        ferramenta_id: str
+    ) -> ToolContract | None:
+
+        return self._ferramentas.get(
+            ferramenta_id
+        )
+
+    def existe(
+        self,
+        ferramenta_id: str
+    ) -> bool:
+
+        return ferramenta_id in self._ferramentas
+
+    def listar(self) -> list[ToolContract]:
+
+        return list(
+            self._ferramentas.values()
+        )
+
+    # ==========================================================
+    # REMOÃ‡ÃƒO
+    # ==========================================================
+
+    def remover(
+        self,
+        ferramenta_id: str
+    ) -> bool:
+
+        if ferramenta_id not in self._ferramentas:
+            return False
+
+        del self._ferramentas[
+            ferramenta_id
+        ]
+
+        return True
+
+    def limpar(self) -> None:
+
+        self._ferramentas.clear()
+
+    # ==========================================================
+    # SCHEMA OLLAMA
+    # ==========================================================
+
+    def gerar_schema_ollama(
+        self,
+        ferramenta: ToolContract
+    ) -> dict:
+
+        propriedades = {}
+
+        obrigatorios = []
+
+        for nome, configuracao in (
+            ferramenta.argumentos or {}
+        ).items():
+
+            if not isinstance(
+                configuracao,
+                dict
+            ):
+                continue
+
+            propriedade = {
+                "type": configuracao.get(
+                    "tipo",
+                    "string"
+                )
+            }
+
+            descricao = configuracao.get(
+                "descricao"
+            )
+
+            if descricao:
+                propriedade[
+                    "description"
+                ] = descricao
+
+            enum = configuracao.get(
+                "enum"
+            )
+
+            if enum:
+                propriedade[
+                    "enum"
+                ] = enum
+
+            propriedades[
+                nome
+            ] = propriedade
+
+            if configuracao.get(
+                "obrigatorio",
+                False
+            ):
+                obrigatorios.append(
+                    nome
+                )
+
+        parameters = {
+            "type": "object",
+            "properties": propriedades,
+        }
+
+        if obrigatorios:
+            parameters[
+                "required"
+            ] = obrigatorios
+
+        return {
+            "type": "function",
+            "function": {
+                "name": ferramenta.id,
+                "description": ferramenta.descricao,
+                "parameters": parameters,
+            },
+        }
+
+    # ==========================================================
+    # SCHEMAS DE VÃRIAS FERRAMENTAS
+    # ==========================================================
+
+    def gerar_schemas_ollama(
+        self,
+        ferramenta_ids: list[str] | None = None
+    ) -> list[dict]:
+        """
+        Gera os schemas Ollama das ferramentas solicitadas.
+
+        Se nenhuma lista for informada, gera o schema
+        de todas as ferramentas registradas.
+        """
+
+        if ferramenta_ids is None:
+
+            ferramentas = self.listar()
+
+        else:
+
+            ferramentas = []
+
+            for ferramenta_id in ferramenta_ids:
+
+                ferramenta = self.obter(
+                    ferramenta_id
+                )
+
+                if ferramenta is not None:
+                    ferramentas.append(
+                        ferramenta
+                    )
+
+        return [
+            self.gerar_schema_ollama(
+                ferramenta
+            )
+            for ferramenta in ferramentas
+        ]
+
+
+# ==============================================================
+# REGISTRY PADRÃƒO
+# ==============================================================
+
+def criar_registry_padrao() -> ToolRegistry:
+
+    registry = ToolRegistry()
+
+    # ----------------------------------------------------------
+    # Hora
+    # ----------------------------------------------------------
+
+    ferramenta_hora = FerramentaHora()
+
+    registry.registrar(
+        ToolContract(
+            id="obter_hora_atual",
+            nome="Obter hora atual",
+            descricao=(
+                "ObtÃ©m a data e hora atual do sistema."
+            ),
+            categoria="sistema",
+            risco="baixo",
+            argumentos={},
+            requer_confirmacao=False,
+            handler=ferramenta_hora.executar,
+        )
+    )
+
+    # ----------------------------------------------------------
+    # Calculadora
+    # ----------------------------------------------------------
+
+    ferramenta_calculadora = (
+        FerramentaCalculadora()
+    )
+
+    registry.registrar(
+        ToolContract(
+            id="calcular",
+            nome="Calculadora",
+            descricao=(
+                "Executa cÃ¡lculos matemÃ¡ticos."
+            ),
+            categoria="matematica",
+            risco="baixo",
+            argumentos={
+                "expressao": {
+                    "tipo": "string",
+                    "obrigatorio": True,
+                    "descricao": (
+                        "ExpressÃ£o matemÃ¡tica "
+                        "a ser calculada."
+                    ),
+                }
+            },
+            requer_confirmacao=False,
+            handler=ferramenta_calculadora.executar,
+        )
+    )
+
+    # ----------------------------------------------------------
+    # Leitura de arquivo
+    # ----------------------------------------------------------
+
+    ferramenta_arquivo = (
+        FerramentaLerArquivo()
+    )
+
+    registry.registrar(
+        ToolContract(
+            id="ler_arquivo_codigo",
+            nome="Ler arquivo",
+            descricao=(
+                "LÃª o conteÃºdo de um arquivo "
+                "de cÃ³digo ou texto localizado "
+                "na pasta projetos/."
+            ),
+            categoria="arquivos",
+            risco="baixo",
+            argumentos={
+                "nome_arquivo": {
+                    "tipo": "string",
+                    "obrigatorio": True,
+                    "descricao": (
+                        "Nome exato do arquivo "
+                        "dentro da pasta projetos/."
+                    ),
+                }
+            },
+            requer_confirmacao=False,
+            handler=ferramenta_arquivo.executar,
+        )
+    )
+
+    # ----------------------------------------------------------
+    # Controle do computador
+    # ----------------------------------------------------------
+
+    # IMPORTANTE:
+    # Esta ferramenta nÃ£o recebe um handler genÃ©rico aqui.
+    # Ela depende de ACOES_PERMITIDAS carregadas pelo mÃ³dulo
+    # tools.py e possui comportamento fÃ­sico no computador.
+
+    registry.registrar(
+        ToolContract(
+            id="controlar_computador",
+            nome="Controlar computador",
+            descricao=(
+                "Executa uma aÃ§Ã£o fÃ­sica autorizada "
+                "no computador do usuÃ¡rio."
+            ),
+            categoria="computador",
+            risco="alto",
+            argumentos={
+                "acao": {
+                    "tipo": "string",
+                    "obrigatorio": True,
+                    "descricao": (
+                        "AÃ§Ã£o autorizada a ser "
+                        "executada no computador."
+                    ),
+                }
+            },
+            requer_confirmacao=True,
+            handler=None,
+        )
+    )
+
+    # ----------------------------------------------------------
+    # Terminal
+    # ----------------------------------------------------------
+
+    ferramenta_terminal = (
+        FerramentaTerminal()
+    )
+
+    registry.registrar(
+        ToolContract(
+            id="terminal_dinamico",
+            nome="Terminal dinÃ¢mico",
+            descricao=(
+                "Executa um comando no terminal "
+                "do computador."
+            ),
+            categoria="terminal",
+            risco="alto",
+            argumentos={
+                "comando": {
+                    "tipo": "string",
+                    "obrigatorio": True,
+                    "descricao": (
+                        "Comando de terminal "
+                        "a ser executado."
+                    ),
+                }
+            },
+            requer_confirmacao=True,
+            handler=ferramenta_terminal.executar,
+        )
+    )
+
+    # ----------------------------------------------------------
+    # InteraÃ§Ã£o com tela
+    # ----------------------------------------------------------
+
+    ferramenta_tela = (
+        FerramentaInteragirEcra()
+    )
+
+    registry.registrar(
+        ToolContract(
+            id="interagir_ecra",
+            nome="Interagir com a tela",
+            descricao=(
+                "Permite analisar a tela e "
+                "interagir com mouse e teclado."
+            ),
+            categoria="interface",
+            risco="alto",
+            argumentos={
+                "acao": {
+                    "tipo": "string",
+                    "obrigatorio": True,
+                    "descricao": (
+                        "AÃ§Ã£o a executar na interface."
+                    ),
+                    "enum": [
+                        "analisar_tela",
+                        "escrever",
+                        "tecla",
+                        "clicar",
+                    ],
+                },
+                "texto": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": (
+                        "Texto a digitar ou "
+                        "tecla a pressionar."
+                    ),
+                },
+            },
+            requer_confirmacao=True,
+            handler=ferramenta_tela.executar,
+        )
+    )
+
+    return registry
+from typing import Any
+
+from app.tools.tool_contract import ToolContract
+
+
+TIPOS_PERMITIDOS = {
+    "string": str,
+    "integer": int,
+    "number": (int, float),
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+}
+
+
+def validar_argumentos(
+    ferramenta: ToolContract,
+    argumentos: dict[str, Any],
+) -> tuple[bool, str]:
+    if not isinstance(argumentos, dict):
+        return False, "Os argumentos da ferramenta devem ser um objeto."
+
+    schema = ferramenta.argumentos or {}
+
+    for nome, configuracao in schema.items():
+        if not isinstance(configuracao, dict):
+            continue
+
+        obrigatorio = configuracao.get("obrigatorio", False)
+
+        if obrigatorio and nome not in argumentos:
+            return False, (
+                f"O argumento obrigatÃ³rio '{nome}' nÃ£o foi informado."
+            )
+
+        if nome not in argumentos:
+            continue
+
+        valor = argumentos[nome]
+        tipo = configuracao.get("tipo")
+
+        if tipo not in TIPOS_PERMITIDOS:
+            return False, (
+                f"O schema da ferramenta possui o tipo "
+                f"desconhecido '{tipo}'."
+            )
+
+        tipo_esperado = TIPOS_PERMITIDOS[tipo]
+
+        # bool Ã© uma subclasse de int em Python.
+        # Por isso precisa ser tratado separadamente.
+        if tipo in {"integer", "number"} and isinstance(valor, bool):
+            return False, (
+                f"O argumento '{nome}' deve possuir o tipo '{tipo}'."
+            )
+
+        if not isinstance(valor, tipo_esperado):
+            return False, (
+                f"O argumento '{nome}' deve possuir o tipo '{tipo}'."
+            )
+
+    return True, ""

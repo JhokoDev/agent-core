@@ -1,0 +1,88 @@
+﻿
+Path                                                 LineNumber Line                                                
+----                                                 ---------- ----                                                
+C:\Projetos\agent-core-main\app\ai\model_contract.py          6 class ModelContract:                                
+C:\Projetos\agent-core-main\app\ai\model_contract.py          8     Representa um modelo de IA de forma independente
+C:\Projetos\agent-core-main\app\ai\model_contract.py          9     do provider utilizado para executá-lo.          
+C:\Projetos\agent-core-main\app\ai\model_contract.py         14     provider: str = "ollama"                        
+C:\Projetos\agent-core-main\app\ai\model_contract.py         31     def validar(self) -> tuple[bool, str]:          
+C:\Projetos\agent-core-main\app\ai\model_contract.py         34                 "O modelo precisa possuir um ID."   
+C:\Projetos\agent-core-main\app\ai\model_contract.py         39                 "O modelo precisa possuir um nome." 
+C:\Projetos\agent-core-main\app\ai\model_contract.py         42         if not self.provider.strip():               
+C:\Projetos\agent-core-main\app\ai\model_contract.py         44                 "O modelo precisa possuir um prov...
+C:\Projetos\agent-core-main\app\ai\model_profile.py           1 from app.ai.model_contract import ModelContract     
+C:\Projetos\agent-core-main\app\ai\model_profile.py           4 def criar_modelos_padrao() -> list[ModelContract]:  
+C:\Projetos\agent-core-main\app\ai\model_profile.py           6     Cria os modelos inicialmente suportados pelo ...
+C:\Projetos\agent-core-main\app\ai\model_profile.py           8     Llama 3.2 permanece como modelo principal.      
+C:\Projetos\agent-core-main\app\ai\model_profile.py           9     Qwen fica disponível como modelo opcional.      
+C:\Projetos\agent-core-main\app\ai\model_profile.py          13         ModelContract(                              
+C:\Projetos\agent-core-main\app\ai\model_profile.py          16             provider="ollama",                      
+C:\Projetos\agent-core-main\app\ai\model_profile.py          18                 "Modelo principal para tarefas ge...
+C:\Projetos\agent-core-main\app\ai\model_profile.py          32         ModelContract(                              
+C:\Projetos\agent-core-main\app\ai\model_profile.py          35             provider="ollama",                      
+C:\Projetos\agent-core-main\app\ai\model_profile.py          37                 "Modelo opcional para tarefas téc...
+C:\Projetos\agent-core-main\app\ai\model_provider.py          7 from app.models.base import (                       
+C:\Projetos\agent-core-main\app\ai\model_provider.py          8     ChatResult,                                     
+C:\Projetos\agent-core-main\app\ai\model_provider.py         10     ModelHealth,                                    
+C:\Projetos\agent-core-main\app\ai\model_provider.py         11     ProviderError,                                  
+C:\Projetos\agent-core-main\app\ai\model_provider.py         15 class ModelProvider(ABC):                           
+C:\Projetos\agent-core-main\app\ai\model_provider.py         17     Interface comum para execução de modelos de IA. 
+C:\Projetos\agent-core-main\app\ai\model_provider.py         21     def gerar(                                      
+C:\Projetos\agent-core-main\app\ai\model_provider.py         23         modelo: str,                                
+C:\Projetos\agent-core-main\app\ai\model_provider.py         31 class OllamaModelProvider(ModelProvider):           
+C:\Projetos\agent-core-main\app\ai\model_provider.py         33     Provider HTTP para Ollama.                      
+C:\Projetos\agent-core-main\app\ai\model_provider.py         36     def __init__(                                   
+C:\Projetos\agent-core-main\app\ai\model_provider.py         43             "http://localhost:11434/api/chat",      
+C:\Projetos\agent-core-main\app\ai\model_provider.py         47     def gerar(                                      
+C:\Projetos\agent-core-main\app\ai\model_provider.py         49         modelo: str,                                
+C:\Projetos\agent-core-main\app\ai\model_provider.py         55             "model": modelo,                        
+C:\Projetos\agent-core-main\app\ai\model_provider.py         84 def criar_model_provider() -> ModelProvider:        
+C:\Projetos\agent-core-main\app\ai\model_provider.py         85     provider = os.getenv(                           
+C:\Projetos\agent-core-main\app\ai\model_provider.py         86         "MODEL_PROVIDER",                           
+C:\Projetos\agent-core-main\app\ai\model_provider.py         90     if provider == "ollama":                        
+C:\Projetos\agent-core-main\app\ai\model_provider.py         91         return OllamaModelProvider()                
+C:\Projetos\agent-core-main\app\ai\model_provider.py         94         f"Model Provider não suportado: '{provide...
+C:\Projetos\agent-core-main\app\ai\model_registry.py          1 from app.ai.model_contract import ModelContract     
+C:\Projetos\agent-core-main\app\ai\model_registry.py          4 class ModelRegistry:                                
+C:\Projetos\agent-core-main\app\ai\model_registry.py          6     Registro central dos modelos disponíveis no A...
+C:\Projetos\agent-core-main\app\ai\model_registry.py          9     def __init__(self):                             
+C:\Projetos\agent-core-main\app\ai\model_registry.py         10         self._modelos: dict[str, ModelContract] = {}
+C:\Projetos\agent-core-main\app\ai\model_registry.py         12     def registrar(                                  
+C:\Projetos\agent-core-main\app\ai\model_registry.py         14         modelo: ModelContract,                      
+C:\Projetos\agent-core-main\app\ai\model_registry.py         16         valido, erro = modelo.validar()             
+C:\Projetos\agent-core-main\app\ai\model_registry.py         20                 f"Modelo inválido: {erro}"          
+C:\Projetos\agent-core-main\app\ai\model_registry.py         23         if modelo.id in self._modelos:              
+C:\Projetos\agent-core-main\app\ai\model_registry.py         25                 f"O modelo '{modelo.id}' já está ...
+C:\Projetos\agent-core-main\app\ai\model_registry.py         28         self._modelos[modelo.id] = modelo           
+C:\Projetos\agent-core-main\app\ai\model_registry.py         30     def obter(                                      
+C:\Projetos\agent-core-main\app\ai\model_registry.py         32         modelo_id: str,                             
+C:\Projetos\agent-core-main\app\ai\model_registry.py         33     ) -> ModelContract | None:                      
+C:\Projetos\agent-core-main\app\ai\model_registry.py         34         return self._modelos.get(modelo_id)         
+C:\Projetos\agent-core-main\app\ai\model_registry.py         36     def selecionar(                                 
+C:\Projetos\agent-core-main\app\ai\model_registry.py         38         modelo_id: str,                             
+C:\Projetos\agent-core-main\app\ai\model_registry.py         40     ) -> tuple[ModelContract, bool]:                
+C:\Projetos\agent-core-main\app\ai\model_registry.py         42         Seleciona um modelo registrado.             
+C:\Projetos\agent-core-main\app\ai\model_registry.py         45             (modelo, fallback_utilizado)            
+C:\Projetos\agent-core-main\app\ai\model_registry.py         48         modelo = self.obter(modelo_id)              
+C:\Projetos\agent-core-main\app\ai\model_registry.py         50         if modelo is not None:                      
+C:\Projetos\agent-core-main\app\ai\model_registry.py         51             return modelo, False                    
+C:\Projetos\agent-core-main\app\ai\model_registry.py         57                 f"O modelo '{modelo_id}' não está...
+C:\Projetos\agent-core-main\app\ai\model_registry.py         63     def existe(                                     
+C:\Projetos\agent-core-main\app\ai\model_registry.py         65         modelo_id: str,                             
+C:\Projetos\agent-core-main\app\ai\model_registry.py         67         return modelo_id in self._modelos           
+C:\Projetos\agent-core-main\app\ai\model_registry.py         69     def listar(self) -> list[ModelContract]:        
+C:\Projetos\agent-core-main\app\ai\model_registry.py         70         return list(self._modelos.values())         
+C:\Projetos\agent-core-main\app\ai\model_registry.py         72     def remover(                                    
+C:\Projetos\agent-core-main\app\ai\model_registry.py         74         modelo_id: str,                             
+C:\Projetos\agent-core-main\app\ai\model_registry.py         76         if modelo_id not in self._modelos:          
+C:\Projetos\agent-core-main\app\ai\model_registry.py         79         del self._modelos[modelo_id]                
+C:\Projetos\agent-core-main\app\ai\model_registry.py         82     def limpar(self) -> None:                       
+C:\Projetos\agent-core-main\app\ai\model_registry.py         83         self._modelos.clear()                       
+C:\Projetos\agent-core-main\app\ai\model_registry.py         86 def criar_registry_padrao() -> ModelRegistry:       
+C:\Projetos\agent-core-main\app\ai\model_registry.py         87     from app.ai.model_profile import criar_modelo...
+C:\Projetos\agent-core-main\app\ai\model_registry.py         89     registry = ModelRegistry()                      
+C:\Projetos\agent-core-main\app\ai\model_registry.py         91     for modelo in criar_modelos_padrao():           
+C:\Projetos\agent-core-main\app\ai\model_registry.py         92         registry.registrar(modelo)                  
+C:\Projetos\agent-core-main\app\ai\model_registry.py         94     return registry                                 
+
+

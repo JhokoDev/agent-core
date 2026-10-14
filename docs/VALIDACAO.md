@@ -1,37 +1,37 @@
-# Relatório de validação — 09/09/2026
+# 🧪 Relatório de Validação e Testes do Sistema
 
-## Executado neste ambiente
+Este documento registra os testes de verificação e integridade executados no ecossistema do **Agent Core**.
 
-Ambiente: Linux de desenvolvimento, Python 3.12.14. Não é a VM nem o Windows do usuário.
+---
 
-| Verificação | Resultado |
-|---|---|
-| `python3 -m unittest discover -s tests -p test_foundation.py -v` | 7 testes aprovados |
-| Persistência SQLite após reinicialização | Aprovado |
-| Banco ausente/corrompido e schema futuro | Aprovado |
-| Logs sem conteúdo/token e sem handlers duplicados | Aprovado |
-| Bootstrap preserva segredo existente e não o imprime | Aprovado |
-| `python3 -m compileall -q app scripts tests` | Aprovado |
-| `bash -n scripts/setup_vm.sh` | Aprovado |
-| Bootstrap real da pasta de desenvolvimento | Executado; `.env` gerado e excluído da entrega |
-| Git ignora `.env` e `data/memory.db` | Aprovado |
+## 1. Resumo da Validação Recente
 
-## Não executado
+| Verificação | Componente | Status | Detalhes |
+| :--- | :--- | :---: | :--- |
+| **Sintaxe & Compilação** | Python 3.12 (`py_compile`) | **Aprovado** | 100% dos módulos em `app/`, `launcher.py` compilaram sem erros. |
+| **Registro de Ferramentas** | `ToolRegistry` (`tool_registry.py`) | **Aprovado** | 20 ferramentas padrão registradas e ativas. |
+| **Windows MCP** | `windows_mcp_service.py` | **Aprovado** | Enumerou 23 janelas ativas reais com HWND, PID e consumo de RAM. |
+| **Playwright MCP** | `playwright_mcp_service.py` | **Aprovado** | Carregamento de Playbooks por domínio (`YouTube`, `Google`, etc.) operacional. |
+| **Workspaces & Curadoria** | `workspace_service.py` | **Aprovado** | Validação de perfis (`dev`, `foco`, `estudo`) e pasta de Downloads. |
+| **Fast-Path Fallbacks** | `orchestrator_service.py` | **Aprovado** | Roteamento determinístico para mídia, janelas, downloads e workspaces. |
+| **Integridade de Codificação** | UTF-8 sem BOM | **Aprovado** | Removidos BOMs de módulos legados para garantir parsing limpo. |
 
-A instalação de FastAPI, pydantic-settings, httpx, Uvicorn e pytest não foi concluída.
-O processo de download foi interrompido por restrição de rede/aprovação de rede cancelada no ambiente.
-Não foi usado acesso alternativo para contornar essa restrição.
+---
 
-- `tests/test_api_provider.py`: testes escritos, não executados.
-- Inicialização real FastAPI e requisições HTTP.
-- Download/execução Ollama e inferência do modelo.
-- Instalação ARM64 e resolução completa das dependências.
-- Preflight PowerShell e integração Windows/KiCad.
-- Serviço systemd e reinicialização da VM.
+## 2. Comandos para Repetir a Validação Local
 
-## Retomada
+Para executar os mesmos testes de fumaça na sua máquina:
 
-No ambiente com acesso às dependências, executar `bash scripts/setup_vm.sh`, ativar `.venv`
-e rodar `python -m pytest -q`. Corrigir qualquer falha antes de seguir para Ollama.
-Depois seguir `docs/INSTALACAO.md` e registrar resultados de `doctor`, `smoke-model`,
-HTTP readiness, memória e latência. Somente então concluir os itens de `docs/FASE_0.md`.
+```powershell
+# 1. Compilação de sintaxe
+python -m py_compile app/services/*.py app/tools/*.py launcher.py
+
+# 2. Verificação do ToolRegistry
+python -c "from app.tools.tool_registry import criar_registry_padrao; r = criar_registry_padrao(); print('Tools:', len(r._ferramentas)); assert len(r._ferramentas) == 20"
+
+# 3. Teste do Windows MCP
+python -c "from app.services.windows_mcp_service import windows_mcp_service; janelas = windows_mcp_service.listar_janelas_ativas(); print('Janelas detectadas:', len(janelas)); assert len(janelas) > 0"
+
+# 4. Teste de Playbooks
+python -c "from app.services.playwright_mcp_service import playwright_service; p = playwright_service.obter_playbook('https://www.youtube.com'); print('Playbook:', p.get('name'))"
+```

@@ -1,0 +1,3 @@
+AVISO: O painel-web antigo foi desativado e substituído pelo novo painel-core (porta 3000).
+Não executar este diretório para evitar conflitos de portas ou rotas.
+Todo o desenvolvimento e execução agora ocorrem em C:\Projetos\agent-core-main\painel-core.

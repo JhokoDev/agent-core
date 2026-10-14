@@ -1,2 +1,11 @@
 # Fonte única das dependências em pyproject.toml. Ainda sem lock validado.
 -e .[dev]
+fastapi
+uvicorn
+pydantic
+httpx
+pyyaml
+streamlit
+openai-whisper
+python-multipart
+psutil

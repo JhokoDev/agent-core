@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Playwright MCP & Harvey Extension",
+  "version": "1.0.0",
+  "description": "Extensão oficial Harvey e Playwright MCP Bridge para automação, abas, mídia e controle web seguro.",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Harvey & Playwright MCP Bridge"
+  }
+}

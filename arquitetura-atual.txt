@@ -1,0 +1,1745 @@
+﻿
+==================== .\app\api\main.py ====================
+
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi.responses import StreamingResponse
+import shutil
+import os
+
+from app.api.schemas import ChatRequest
+from app.core.security import verificar_token
+from app import services
+from app.infrastructure import storage
+from app.infrastructure import audio
+
+app = FastAPI()
+
+# ==========================================
+# ROTAS DA API
+# ==========================================
+
+@app.get("/agentes", dependencies=[Depends(verificar_token)])
+async def listar_agentes():
+    """ Retorna a lista de todas as Skills e Tools disponÃ­veis. """
+    return storage.listar_todos_agentes()  
+
+@app.get("/chats", dependencies=[Depends(verificar_token)])
+async def listar_chats():
+    """ Retorna o histÃ³rico de todas as conversas salvas em JSON. """
+    return storage.listar_historico_chats()  
+
+@app.get("/chats/{chat_id}", dependencies=[Depends(verificar_token)])
+async def carregar_chat(chat_id: str):
+    """ Carrega as mensagens de uma conversa especÃ­fica. """
+    chat = storage.obter_chat(chat_id)  
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat nÃ£o encontrado.")
+    return chat
+
+@app.post("/chat", dependencies=[Depends(verificar_token)])
+async def chat(requisicao: ChatRequest):
+    """ Processa a mensagem do usuÃ¡rio e retorna a resposta em Streaming (SSE). """
+    try:
+        # CORREÃ‡ÃƒO: Removemos o 'await' aqui. 
+        # A funÃ§Ã£o geradora Ã© atribuÃ­da diretamente Ã  variÃ¡vel.
+        gerador = services.processar_mensagem_ia_stream(requisicao)
+        
+        return StreamingResponse(gerador, media_type="text/event-stream")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro no Processamento: {e}")
+
+@app.post("/transcrever", dependencies=[Depends(verificar_token)])
+async def transcrever(arquivo: UploadFile = File(...)):
+    """ Recebe o Ã¡udio do celular e devolve o texto transcrito via Whisper. """
+    try:
+        caminho_temp = f"temp_audio_{arquivo.filename}"
+        
+        with open(caminho_temp, "wb") as buffer:
+            shutil.copyfileobj(arquivo.file, buffer)
+            
+        texto_extraido = audio.transcrever_audio(caminho_temp)
+        
+        return {"texto": texto_extraido}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Falha ao processar Ã¡udio: {e}")
+
+
+==================== .\app\api\schemas.py ====================
+
+from pydantic import BaseModel, Field
+from typing import Optional
+
+
+class AgenteInfo(BaseModel):
+    id: str
+    nome: str
+    icone: str
+    tipo: str
+    modelo: str
+    temperatura: float
+    prompt_sistema: str
+
+    # Ferramentas que esta Skill estÃ¡ autorizada a disponibilizar ao modelo.
+    # Lista vazia significa que nenhuma ferramenta serÃ¡ disponibilizada.
+    ferramentas_permitidas: list[str] = Field(default_factory=list)
+
+
+class ChatRequest(BaseModel):
+    texto: str
+    skill_id: Optional[str] = "default"
+    tool_id: Optional[str] = None
+    chat_id: Optional[str] = None
+    imagem_base64: Optional[str] = None
+
+==================== .\app\routing\router.py ====================
+
+from app.ai.model_registry import ModelRegistry, criar_registry_padrao
+from app.routing.router_contract import RouterContract
+
+
+ROTAS_VALIDAS = {
+    "simples",
+    "codigo",
+    "complexo",
+}
+
+MODELO_FALLBACK = "llama3.2:1b"
+
+
+class Router:
+    """
+    Roteador central do Agent Core.
+
+    O Router decide qual fluxo deve processar
+    uma solicitação, mas não executa o modelo.
+
+    A seleção do modelo é feita através do
+    ModelRegistry.
+    """
+
+    def __init__(
+        self,
+        model_registry: ModelRegistry | None = None,
+        modelo_simples: str = MODELO_FALLBACK,
+        modelo_codigo: str = MODELO_FALLBACK,
+        modelo_complexo: str = MODELO_FALLBACK,
+    ):
+        self.model_registry = (
+            model_registry
+            or criar_registry_padrao()
+        )
+
+        self.modelo_simples = modelo_simples
+        self.modelo_codigo = modelo_codigo
+        self.modelo_complexo = modelo_complexo
+
+    # ==========================================================
+    # API PRINCIPAL
+    # ==========================================================
+
+    def rotear(
+        self,
+        texto: str,
+        skill_id: str | None = None,
+    ) -> RouterContract:
+
+        texto_normalizado = self._normalizar(
+            texto
+        )
+
+        if not texto_normalizado:
+            return self._criar_resultado(
+                rota="simples",
+                skill_id=skill_id,
+                motivo="Mensagem vazia ou sem conteúdo.",
+                confianca=1.0,
+            )
+
+        rota, confianca, motivo = (
+            self._determinar_rota(
+                texto_normalizado
+            )
+        )
+
+        return self._criar_resultado(
+            rota=rota,
+            skill_id=skill_id,
+            motivo=motivo,
+            confianca=confianca,
+        )
+
+    # ==========================================================
+    # NORMALIZAÇÃO
+    # ==========================================================
+
+    def _normalizar(
+        self,
+        texto: str,
+    ) -> str:
+
+        if not isinstance(texto, str):
+            return ""
+
+        return texto.strip().lower()
+
+    # ==========================================================
+    # DETERMINAÇÃO DA ROTA
+    # ==========================================================
+
+    def _determinar_rota(
+        self,
+        texto: str,
+    ) -> tuple[str, float, str]:
+
+        if self._parece_codigo(texto):
+            return (
+                "codigo",
+                0.9,
+                "A solicitação aparenta envolver programação.",
+            )
+
+        if self._parece_complexo(texto):
+            return (
+                "complexo",
+                0.7,
+                "A solicitação aparenta exigir processamento mais complexo.",
+            )
+
+        return (
+            "simples",
+            0.8,
+            "Solicitação geral sem indicação de complexidade elevada.",
+        )
+
+    # ==========================================================
+    # RESULTADO
+    # ==========================================================
+
+    def _criar_resultado(
+        self,
+        rota: str,
+        skill_id: str | None,
+        motivo: str,
+        confianca: float,
+    ) -> RouterContract:
+
+        if rota not in ROTAS_VALIDAS:
+            raise ValueError(
+                f"Rota inválida: '{rota}'."
+            )
+
+        modelo, fallback_utilizado = (
+            self._modelo_da_rota(rota)
+        )
+
+        metadata = {
+            "router_version": "3.0",
+            "deterministico": True,
+            "model_registry": True,
+            "fallback_utilizado": fallback_utilizado,
+        }
+
+        return RouterContract(
+            rota=rota,
+            modelo=modelo.id,
+            skill_id=skill_id,
+            motivo=motivo,
+            confianca=confianca,
+            metadata=metadata,
+        )
+
+    # ==========================================================
+    # MODELO DA ROTA
+    # ==========================================================
+
+    def _modelo_da_rota(
+        self,
+        rota: str,
+    ):
+        modelos = {
+            "simples": self.modelo_simples,
+            "codigo": self.modelo_codigo,
+            "complexo": self.modelo_complexo,
+        }
+
+        try:
+            modelo_id = modelos[rota]
+        except KeyError:
+            raise ValueError(
+                f"Não existe modelo configurado "
+                f"para a rota '{rota}'."
+            )
+
+        return self.model_registry.selecionar(
+            modelo_id=modelo_id,
+            fallback_id=MODELO_FALLBACK,
+        )
+
+    # ==========================================================
+    # DETECÇÃO DE CÓDIGO
+    # ==========================================================
+
+    def _parece_codigo(
+        self,
+        texto: str,
+    ) -> bool:
+
+        indicadores = (
+            "python",
+            "java",
+            "javascript",
+            "typescript",
+            "kotlin",
+            "php",
+            "c++",
+            "c#",
+            "html",
+            "css",
+            "sql",
+            "debug",
+            "debugar",
+            "erro no código",
+            "erro no codigo",
+            "stack trace",
+            "exception",
+            "traceback",
+            "função",
+            "funcao",
+            "classe",
+            "método",
+            "metodo",
+            "api",
+            "endpoint",
+            "fastapi",
+            "android",
+            "gradle",
+            "docker",
+            "git",
+        )
+
+        return any(
+            indicador in texto
+            for indicador in indicadores
+        )
+
+    # ==========================================================
+    # DETECÇÃO DE COMPLEXIDADE
+    # ==========================================================
+
+    def _parece_complexo(
+        self,
+        texto: str,
+    ) -> bool:
+
+        indicadores = (
+            "arquitetura",
+            "refatore todo",
+            "refatorar todo",
+            "analise profundamente",
+            "analisar profundamente",
+            "projeto completo",
+            "planeje uma arquitetura",
+            "planejar uma arquitetura",
+            "compare detalhadamente",
+            "investigue",
+            "pesquisa completa",
+            "multi etapa",
+            "multi-etapa",
+        )
+
+        return any(
+            indicador in texto
+            for indicador in indicadores
+        )
+
+==================== .\app\routing\router_contract.py ====================
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class RouterContract:
+    """
+    Resultado normalizado da decisÃ£o do Router.
+
+    O Router nÃ£o executa a solicitaÃ§Ã£o.
+    Ele apenas determina qual fluxo deve processÃ¡-la.
+    """
+
+    rota: str
+
+    modelo: str | None = None
+
+    skill_id: str | None = None
+
+    motivo: str = ""
+
+    confianca: float | None = None
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+==================== .\app\planning\planner.py ====================
+
+from app.planning.planner_contract import (
+    PlanStep,
+    PlannerContract,
+)
+
+
+class Planner:
+    """
+    Planner determinÃ­stico inicial.
+
+    ResponsÃ¡vel por transformar uma solicitaÃ§Ã£o
+    em uma estrutura de etapas.
+
+    NÃ£o executa ferramentas nem modelos.
+    """
+
+    def planejar(
+        self,
+        objetivo: str,
+        etapas: list[dict] | None = None,
+    ) -> PlannerContract:
+
+        objetivo = objetivo.strip()
+
+        if not objetivo:
+            return PlannerContract(
+                objetivo="",
+                etapas=[],
+                metadata={
+                    "planner_version": "1.0",
+                    "deterministico": True,
+                },
+            )
+
+        etapas_normalizadas = []
+
+        for indice, dados in enumerate(etapas or [], start=1):
+            etapas_normalizadas.append(
+                PlanStep(
+                    id=dados.get(
+                        "id",
+                        f"etapa_{indice}"
+                    ),
+                    descricao=dados.get(
+                        "descricao",
+                        ""
+                    ),
+                    ferramenta=dados.get("ferramenta"),
+                    argumentos=dados.get(
+                        "argumentos",
+                        {}
+                    ),
+                )
+            )
+
+        plano = PlannerContract(
+            objetivo=objetivo,
+            etapas=etapas_normalizadas,
+            metadata={
+                "planner_version": "1.0",
+                "deterministico": True,
+                "quantidade_etapas": len(etapas_normalizadas),
+            },
+        )
+
+        valido, erro = plano.validar()
+
+        if not valido:
+            raise ValueError(
+                f"Plano invÃ¡lido: {erro}"
+            )
+
+        return plano
+
+==================== .\app\planning\planner_contract.py ====================
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+ESTADOS_ETAPA_VALIDOS = {
+    "pendente",
+    "executando",
+    "concluida",
+    "falhou",
+    "cancelada",
+}
+
+
+@dataclass
+class PlanStep:
+    id: str
+    descricao: str
+    estado: str = "pendente"
+    ferramenta: str | None = None
+    argumentos: dict[str, Any] = field(default_factory=dict)
+    resultado: Any = None
+    erro: str | None = None
+
+
+@dataclass
+class PlannerContract:
+    objetivo: str
+    etapas: list[PlanStep] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def validar(self) -> tuple[bool, str]:
+        if not self.objetivo.strip():
+            return False, "O plano precisa possuir um objetivo."
+
+        ids: set[str] = set()
+
+        for etapa in self.etapas:
+            if not etapa.id:
+                return False, "Toda etapa precisa possuir um ID."
+
+            if etapa.id in ids:
+                return False, (
+                    f"A etapa '{etapa.id}' estÃ¡ duplicada."
+                )
+
+            ids.add(etapa.id)
+
+            if not etapa.descricao.strip():
+                return False, (
+                    f"A etapa '{etapa.id}' precisa possuir uma descriÃ§Ã£o."
+                )
+
+            if etapa.estado not in ESTADOS_ETAPA_VALIDOS:
+                return False, (
+                    f"A etapa '{etapa.id}' possui estado invÃ¡lido: "
+                    f"'{etapa.estado}'."
+                )
+
+        return True, ""
+
+==================== .\app\ai\model_contract.py ====================
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class ModelContract:
+    """
+    Representa um modelo de IA de forma independente
+    do provider utilizado para executÃ¡-lo.
+    """
+
+    id: str
+    nome: str
+    provider: str = "ollama"
+
+    descricao: str = ""
+
+    suporta_tools: bool = False
+    suporta_vision: bool = False
+
+    contexto_maximo: int | None = None
+
+    capacidades: list[str] = field(
+        default_factory=list
+    )
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+    def validar(self) -> tuple[bool, str]:
+        if not self.id.strip():
+            return False, (
+                "O modelo precisa possuir um ID."
+            )
+
+        if not self.nome.strip():
+            return False, (
+                "O modelo precisa possuir um nome."
+            )
+
+        if not self.provider.strip():
+            return False, (
+                "O modelo precisa possuir um provider."
+            )
+
+        if self.contexto_maximo is not None:
+            if self.contexto_maximo <= 0:
+                return False, (
+                    "O contexto mÃ¡ximo deve ser maior que zero."
+                )
+
+        if not isinstance(self.capacidades, list):
+            return False, (
+                "As capacidades devem ser uma lista."
+            )
+
+        if not isinstance(self.metadata, dict):
+            return False, (
+                "Os metadados devem ser um objeto."
+            )
+
+        return True, ""
+
+==================== .\app\ai\model_profile.py ====================
+
+from app.ai.model_contract import ModelContract
+
+
+def criar_modelos_padrao() -> list[ModelContract]:
+    """
+    Cria os modelos inicialmente suportados pelo Agent Core.
+
+    Llama 3.2 permanece como modelo principal.
+    Qwen fica disponÃ­vel como modelo opcional.
+    """
+
+    return [
+        ModelContract(
+            id="llama3.2:1b",
+            nome="Llama 3.2 1B",
+            provider="ollama",
+            descricao=(
+                "Modelo principal para tarefas gerais "
+                "e processamento local."
+            ),
+            suporta_tools=True,
+            suporta_vision=False,
+            contexto_maximo=4096,
+            capacidades=[
+                "conversa",
+                "classificacao",
+                "resumo",
+                "extracao",
+                "tools",
+            ],
+        ),
+        ModelContract(
+            id="qwen",
+            nome="Qwen",
+            provider="ollama",
+            descricao=(
+                "Modelo opcional para tarefas tÃ©cnicas "
+                "e programaÃ§Ã£o."
+            ),
+            suporta_tools=True,
+            suporta_vision=False,
+            capacidades=[
+                "codigo",
+                "analise_tecnica",
+                "tools",
+            ],
+        ),
+    ]
+
+==================== .\app\ai\model_provider.py ====================
+
+import os
+from abc import ABC, abstractmethod
+from typing import Any
+
+import requests
+
+from app.models.base import (
+    ChatResult,
+    Message,
+    ModelHealth,
+    ProviderError,
+)
+
+
+class ModelProvider(ABC):
+    """
+    Interface comum para execução de modelos de IA.
+    """
+
+    @abstractmethod
+    def gerar(
+        self,
+        modelo: str,
+        mensagens: list[dict],
+        temperatura: float = 0.5,
+        ferramentas: list[dict] | None = None,
+    ) -> dict:
+        raise NotImplementedError
+
+
+class OllamaModelProvider(ModelProvider):
+    """
+    Provider HTTP para Ollama.
+    """
+
+    def __init__(
+        self,
+        url: str | None = None,
+        timeout: int = 300,
+    ):
+        self.url = url or os.getenv(
+            "OLLAMA_URL",
+            "http://localhost:11434/api/chat",
+        )
+        self.timeout = timeout
+
+    def gerar(
+        self,
+        modelo: str,
+        mensagens: list[dict],
+        temperatura: float = 0.5,
+        ferramentas: list[dict] | None = None,
+    ) -> dict:
+        payload: dict[str, Any] = {
+            "model": modelo,
+            "messages": mensagens,
+            "stream": False,
+            "options": {
+                "temperature": temperatura,
+            },
+        }
+
+        if ferramentas:
+            payload["tools"] = ferramentas
+
+        resposta = requests.post(
+            self.url,
+            json=payload,
+            timeout=self.timeout,
+        )
+
+        resposta.raise_for_status()
+
+        dados = resposta.json()
+
+        if not isinstance(dados, dict):
+            raise RuntimeError(
+                "O provedor Ollama retornou uma resposta inválida."
+            )
+
+        return dados
+
+
+def criar_model_provider() -> ModelProvider:
+    provider = os.getenv(
+        "MODEL_PROVIDER",
+        "ollama",
+    ).strip().lower()
+
+    if provider == "ollama":
+        return OllamaModelProvider()
+
+    raise ValueError(
+        f"Model Provider não suportado: '{provider}'."
+    )
+
+==================== .\app\ai\model_registry.py ====================
+
+from app.ai.model_contract import ModelContract
+
+
+class ModelRegistry:
+    """
+    Registro central dos modelos disponíveis no Agent Core.
+    """
+
+    def __init__(self):
+        self._modelos: dict[str, ModelContract] = {}
+
+    def registrar(
+        self,
+        modelo: ModelContract,
+    ) -> None:
+        valido, erro = modelo.validar()
+
+        if not valido:
+            raise ValueError(
+                f"Modelo inválido: {erro}"
+            )
+
+        if modelo.id in self._modelos:
+            raise ValueError(
+                f"O modelo '{modelo.id}' já está registrado."
+            )
+
+        self._modelos[modelo.id] = modelo
+
+    def obter(
+        self,
+        modelo_id: str,
+    ) -> ModelContract | None:
+        return self._modelos.get(modelo_id)
+
+    def selecionar(
+        self,
+        modelo_id: str,
+        fallback_id: str = "llama3.2:1b",
+    ) -> tuple[ModelContract, bool]:
+        """
+        Seleciona um modelo registrado.
+
+        Retorna:
+            (modelo, fallback_utilizado)
+        """
+
+        modelo = self.obter(modelo_id)
+
+        if modelo is not None:
+            return modelo, False
+
+        fallback = self.obter(fallback_id)
+
+        if fallback is None:
+            raise ValueError(
+                f"O modelo '{modelo_id}' não está registrado "
+                f"e o fallback '{fallback_id}' também não está disponível."
+            )
+
+        return fallback, True
+
+    def existe(
+        self,
+        modelo_id: str,
+    ) -> bool:
+        return modelo_id in self._modelos
+
+    def listar(self) -> list[ModelContract]:
+        return list(self._modelos.values())
+
+    def remover(
+        self,
+        modelo_id: str,
+    ) -> bool:
+        if modelo_id not in self._modelos:
+            return False
+
+        del self._modelos[modelo_id]
+        return True
+
+    def limpar(self) -> None:
+        self._modelos.clear()
+
+
+def criar_registry_padrao() -> ModelRegistry:
+    from app.ai.model_profile import criar_modelos_padrao
+
+    registry = ModelRegistry()
+
+    for modelo in criar_modelos_padrao():
+        registry.registrar(modelo)
+
+    return registry
+
+==================== .\app\models\base.py ====================
+
+from typing import Protocol, Literal
+from pydantic import BaseModel, Field
+
+
+class Message(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(min_length=1, max_length=16000)
+
+
+class ModelHealth(BaseModel):
+    status: Literal["ready", "unreachable", "model_missing", "invalid_response"]
+    model: str
+
+
+class ChatResult(BaseModel):
+    content: str
+    model: str
+
+
+class ProviderError(RuntimeError):
+    """Erro sanitizado; nÃ£o carrega corpo da resposta ou credenciais."""
+
+
+class ModelProvider(Protocol):
+    async def health(self) -> ModelHealth: ...
+    async def chat(self, messages: list[Message]) -> ChatResult: ...
+    async def aclose(self) -> None: ...
+
+==================== .\app\models\ollama.py ====================
+
+import httpx
+from app.core.config import Settings
+from app.models.base import ChatResult, Message, ModelHealth, ProviderError
+
+
+class OllamaProvider:
+    def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None):
+        self.settings = settings
+        self.client = httpx.AsyncClient(base_url=settings.ollama_url, trust_env=False,
+                                       follow_redirects=False, transport=transport)
+
+    async def health(self) -> ModelHealth:
+        status = "ready"
+        try:
+            response = await self.client.get("/api/tags", timeout=self.settings.health_timeout)
+            response.raise_for_status()
+            models = response.json()["models"]
+            if not isinstance(models, list) or any(not isinstance(m, dict) or not isinstance(m.get("name"), str) for m in models):
+                raise ValueError("invalid models")
+            if self.settings.model not in {m["name"] for m in models}:
+                status = "model_missing"
+        except httpx.HTTPError:
+            status = "unreachable"
+        except (ValueError, KeyError, TypeError):
+            status = "invalid_response"
+        return ModelHealth(status=status, model=self.settings.model)
+
+    async def chat(self, messages: list[Message]) -> ChatResult:
+        if not messages:
+            raise ProviderError("empty_messages")
+        payload = {"model": self.settings.model, "messages": [m.model_dump() for m in messages],
+                   "stream": False, "keep_alive": "1m",
+                   "options": {"num_ctx": self.settings.context_window,
+                               "num_predict": self.settings.max_output_tokens}}
+        try:
+            response = await self.client.post("/api/chat", json=payload,
+                                              timeout=self.settings.generation_timeout)
+            response.raise_for_status()
+            body = response.json()
+            content = body["message"]["content"]
+            if body.get("done") is not True or not isinstance(content, str) or not content.strip():
+                raise ValueError("incomplete response")
+            return ChatResult(content=content, model=self.settings.model)
+        except httpx.HTTPError:
+            raise ProviderError("ollama_request_failed") from None
+        except (KeyError, TypeError, ValueError):
+            raise ProviderError("ollama_invalid_response") from None
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
+
+==================== .\app\models\registry.py ====================
+
+from app.core.config import Settings
+from app.models.base import ModelProvider
+from app.models.ollama import OllamaProvider
+
+
+def create_provider(settings: Settings) -> ModelProvider:
+    # SeleÃ§Ã£o por backend; nenhuma decisÃ£o por nome/famÃ­lia do modelo.
+    factories = {"ollama": OllamaProvider}
+    return factories[settings.model_provider](settings)
+
+==================== .\app\services.py ====================
+
+import os
+import json
+import uuid
+from datetime import datetime
+from typing import Any
+
+from app.infrastructure import storage
+
+from app.ai.model_provider import criar_model_provider
+from app.ai.model_registry import (
+    criar_registry_padrao as criar_model_registry_padrao,
+)
+
+from app.planning.planner import Planner
+from app.routing.router import Router
+
+from app.tools.tool_registry import (
+    criar_registry_padrao as criar_tool_registry_padrao,
+)
+from app.tools.tool_permissions import ToolPermissionPolicy
+
+from app.memory.memory_store import MemoryStore
+from app.memory.memory_retrieval import MemoryRetriever
+
+from app.permissions.permission_context import PermissionContext
+from app.permissions.permission_context_registry import (
+    PermissionContextRegistry,
+)
+from app.permissions.permission_engine import PermissionEngine
+from app.permissions.permission_registry import PermissionRegistry
+from app.permissions.permission_service import PermissionService
+
+from app.tools.execution_guard import ExecutionGuard
+
+
+# ============================================================
+# CONFIGURAÃ‡ÃƒO
+# ============================================================
+
+OLLAMA_URL = os.getenv(
+    "OLLAMA_URL",
+    "http://localhost:11434/api/chat",
+)
+
+
+# ============================================================
+# TOOL SYSTEM
+# ============================================================
+
+TOOL_REGISTRY = criar_tool_registry_padrao()
+
+PERMISSION_POLICY = ToolPermissionPolicy()
+
+PERMISSION_REGISTRY = PermissionRegistry()
+
+PERMISSION_CONTEXT_REGISTRY = PermissionContextRegistry()
+
+PERMISSION_ENGINE = PermissionEngine(
+    policy=PERMISSION_POLICY,
+    registry=PERMISSION_REGISTRY,
+)
+
+PERMISSION_SERVICE = PermissionService(
+    engine=PERMISSION_ENGINE,
+    permission_registry=PERMISSION_REGISTRY,
+    context_registry=PERMISSION_CONTEXT_REGISTRY,
+)
+
+EXECUTION_GUARD = ExecutionGuard(
+    permission_service=PERMISSION_SERVICE,
+)
+
+
+# ============================================================
+# MODEL SYSTEM
+# ============================================================
+
+MODEL_REGISTRY = criar_model_registry_padrao()
+
+MODELO_PADRAO = os.getenv(
+    "AGENT_MODEL_PADRAO",
+    "llama3.2:1b",
+)
+
+ROUTER = Router(
+    model_registry=MODEL_REGISTRY,
+    modelo_simples=os.getenv(
+        "AGENT_MODEL_SIMPLES",
+        MODELO_PADRAO,
+    ),
+    modelo_codigo=os.getenv(
+        "AGENT_MODEL_CODIGO",
+        MODELO_PADRAO,
+    ),
+    modelo_complexo=os.getenv(
+        "AGENT_MODEL_COMPLEXO",
+        MODELO_PADRAO,
+    ),
+)
+
+MODEL_PROVIDER = criar_model_provider()
+
+
+# ============================================================
+# PLANNER
+# ============================================================
+
+PLANNER = Planner()
+
+
+# ============================================================
+# MEMORY + RAG
+# ============================================================
+
+MEMORY_STORE = MemoryStore()
+
+MEMORY_RETRIEVER = MemoryRetriever(
+    MEMORY_STORE,
+)
+
+
+# ============================================================
+# PERMISSÃ•ES DE SKILL
+# ============================================================
+
+def carregar_permissoes_skill(
+    contexto_id: str,
+    ferramentas_permitidas: list[str] | None,
+) -> None:
+    """
+    Carrega as permissÃµes de ferramentas associadas a uma Skill.
+    """
+
+    ferramentas = ferramentas_permitidas or []
+
+    contexto = PermissionContext(
+        id=contexto_id,
+        tipo="skill",
+    )
+
+    PERMISSION_CONTEXT_REGISTRY.registrar(
+        contexto,
+    )
+
+    PERMISSION_POLICY.carregar_skill(
+        contexto_id,
+        ferramentas,
+    )
+
+
+# ============================================================
+# FERRAMENTAS
+# ============================================================
+
+def obter_ferramentas_da_skill(
+    ferramentas_permitidas: list[str] | None,
+) -> list[dict]:
+    """
+    Retorna os schemas das ferramentas permitidas
+    no formato esperado pelo Ollama.
+    """
+
+    ferramentas = ferramentas_permitidas or []
+
+    return TOOL_REGISTRY.gerar_schemas_ollama(
+        ferramentas,
+    )
+
+
+def executar_ferramenta_autorizada(
+    contexto_id: str,
+    ferramenta_id: str,
+    argumentos: dict[str, Any],
+) -> Any:
+    """
+    Executa uma ferramenta passando pelo ExecutionGuard.
+    """
+
+    ferramenta = TOOL_REGISTRY.obter(
+        ferramenta_id,
+    )
+
+    if ferramenta is None:
+        raise ValueError(
+            f"Ferramenta '{ferramenta_id}' nÃ£o encontrada."
+        )
+
+    return EXECUTION_GUARD.executar(
+        contexto_id=contexto_id,
+        ferramenta=ferramenta,
+        argumentos=argumentos,
+    )
+
+
+# ============================================================
+# MEMORY
+# ============================================================
+
+def salvar_memoria(
+    conteudo: str,
+    tipo: str = "fato",
+    metadata: dict[str, Any] | None = None,
+) -> Any:
+    """
+    Salva uma memÃ³ria no MemoryStore.
+    """
+
+    return MEMORY_STORE.salvar(
+        conteudo=conteudo,
+        tipo=tipo,
+        metadata=metadata or {},
+    )
+
+
+def recuperar_memorias(
+    consulta: str,
+    limite: int = 5,
+) -> list[Any]:
+    """
+    Recupera memÃ³rias relevantes para uma consulta.
+    """
+
+    return MEMORY_RETRIEVER.buscar(
+        consulta,
+        limite=limite,
+    )
+
+
+# ============================================================
+# CONTEXTO
+# ============================================================
+
+def preparar_contexto_limpo(
+    mensagens: list[dict],
+    limite: int = 20,
+) -> list[dict]:
+    """
+    MantÃ©m apenas mensagens vÃ¡lidas e limita o tamanho
+    do histÃ³rico enviado ao modelo.
+    """
+
+    contexto: list[dict] = []
+
+    for mensagem in mensagens[-limite:]:
+        if not isinstance(mensagem, dict):
+            continue
+
+        role = mensagem.get("role")
+        content = mensagem.get("content")
+
+        if role not in {
+            "system",
+            "user",
+            "assistant",
+            "tool",
+        }:
+            continue
+
+        if not isinstance(content, str):
+            continue
+
+        if not content.strip():
+            continue
+
+        contexto.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+
+    return contexto
+
+
+# ============================================================
+# PLANO
+# ============================================================
+
+def serializar_plano(plano: Any) -> dict | None:
+    """
+    Converte um PlannerContract em um dicionÃ¡rio serializÃ¡vel.
+    """
+
+    if plano is None:
+        return None
+
+    if hasattr(plano, "model_dump"):
+        return plano.model_dump()
+
+    if hasattr(plano, "__dict__"):
+        resultado = {}
+
+        for chave, valor in plano.__dict__.items():
+            if hasattr(valor, "__dict__"):
+                resultado[chave] = valor.__dict__
+
+            elif isinstance(valor, list):
+                resultado[chave] = [
+                    item.__dict__
+                    if hasattr(item, "__dict__")
+                    else item
+                    for item in valor
+                ]
+
+            else:
+                resultado[chave] = valor
+
+        return resultado
+
+    return None
+
+
+# ============================================================
+# CHAT
+# ============================================================
+
+def _obter_chat(
+    chat_id: str | None,
+) -> dict:
+    """
+    ObtÃ©m um chat existente ou cria um novo.
+    """
+
+    if chat_id:
+        chat = storage.obter_chat(
+            chat_id,
+        )
+
+        if chat is not None:
+            return chat
+
+    novo_chat = {
+        "id": chat_id or str(uuid.uuid4()),
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "messages": [],
+    }
+
+    storage.salvar_chat(
+        novo_chat,
+    )
+
+    return novo_chat
+
+
+# ============================================================
+# PROCESSAMENTO PRINCIPAL
+# ============================================================
+
+def processar_mensagem_ia_stream(
+    mensagem: str,
+    chat_id: str | None = None,
+    skill: dict | None = None,
+    imagem_base64: str | None = None,
+):
+    """
+    Processa uma mensagem utilizando:
+
+    Router
+    â†’ Model Registry
+    â†’ Memory
+    â†’ Planner
+    â†’ Tool Registry
+    â†’ Permission System
+    â†’ Model Provider
+    """
+
+    chat = _obter_chat(
+        chat_id,
+    )
+
+    chat_id = chat["id"]
+
+    mensagens_chat = chat.get(
+        "messages",
+        [],
+    )
+
+    # --------------------------------------------------------
+    # SKILL
+    # --------------------------------------------------------
+
+    skill_id = None
+    skill_prompt = None
+    ferramentas_permitidas: list[str] = []
+
+    if skill:
+        skill_id = skill.get(
+            "id",
+        )
+
+        skill_prompt = skill.get(
+            "prompt",
+            skill.get("system_prompt"),
+        )
+
+        ferramentas_permitidas = skill.get(
+            "ferramentas_permitidas",
+            skill.get("tools", []),
+        ) or []
+
+    # --------------------------------------------------------
+    # CONTEXTO DE PERMISSÃ•ES
+    # --------------------------------------------------------
+
+    contexto_id = f"chat:{chat_id}"
+
+    carregar_permissoes_skill(
+        contexto_id,
+        ferramentas_permitidas,
+    )
+
+    # --------------------------------------------------------
+    # MENSAGEM DO USUÃRIO
+    # --------------------------------------------------------
+
+    conteudo_usuario = mensagem
+
+    if imagem_base64:
+        conteudo_usuario = (
+            f"{mensagem}\n\n"
+            "[Imagem anexada em Base64]"
+        )
+
+    mensagem_usuario = {
+        "role": "user",
+        "content": conteudo_usuario,
+    }
+
+    mensagens_chat.append(
+        mensagem_usuario,
+    )
+
+    # --------------------------------------------------------
+    # ROUTER
+    # --------------------------------------------------------
+
+    rota = ROUTER.rotear(
+        mensagem,
+    )
+
+    modelo = rota.modelo
+
+    # --------------------------------------------------------
+    # MEMORY
+    # --------------------------------------------------------
+
+    memorias = recuperar_memorias(
+        mensagem,
+        limite=5,
+    )
+
+    memoria_contexto = ""
+
+    if memorias:
+        linhas_memoria = []
+
+        for memoria in memorias:
+            if isinstance(memoria, dict):
+                conteudo = memoria.get(
+                    "conteudo",
+                    memoria.get("content", ""),
+                )
+            else:
+                conteudo = getattr(
+                    memoria,
+                    "conteudo",
+                    getattr(
+                        memoria,
+                        "content",
+                        "",
+                    ),
+                )
+
+            if conteudo:
+                linhas_memoria.append(
+                    f"- {conteudo}"
+                )
+
+        if linhas_memoria:
+            memoria_contexto = (
+                "MemÃ³rias relevantes:\n"
+                + "\n".join(linhas_memoria)
+            )
+
+    # --------------------------------------------------------
+    # PLANNER
+    # --------------------------------------------------------
+
+    plano = None
+
+    if rota.rota == "complexo":
+        try:
+            plano = PLANNER.criar_plano(
+                mensagem,
+            )
+        except Exception:
+            plano = None
+
+    # --------------------------------------------------------
+    # SYSTEM PROMPT
+    # --------------------------------------------------------
+
+    mensagens_modelo: list[dict] = []
+
+    system_parts = [
+        "VocÃª Ã© o Agent Core, um assistente pessoal generalista.",
+        "Responda de forma objetiva, precisa e Ãºtil.",
+    ]
+
+    if skill_prompt:
+        system_parts.append(
+            f"\nInstruÃ§Ãµes da Skill:\n{skill_prompt}"
+        )
+
+    if memoria_contexto:
+        system_parts.append(
+            f"\n{memoria_contexto}"
+        )
+
+    if plano:
+        plano_serializado = serializar_plano(
+            plano,
+        )
+
+        if plano_serializado:
+            system_parts.append(
+                "\nPlano de execuÃ§Ã£o:\n"
+                + json.dumps(
+                    plano_serializado,
+                    ensure_ascii=False,
+                )
+            )
+
+    mensagens_modelo.append(
+        {
+            "role": "system",
+            "content": "\n".join(system_parts),
+        }
+    )
+
+    # --------------------------------------------------------
+    # HISTÃ“RICO
+    # --------------------------------------------------------
+
+    mensagens_modelo.extend(
+        preparar_contexto_limpo(
+            mensagens_chat,
+        )
+    )
+
+    # --------------------------------------------------------
+    # TOOLS
+    # --------------------------------------------------------
+
+    ferramentas = obter_ferramentas_da_skill(
+        ferramentas_permitidas,
+    )
+
+    # --------------------------------------------------------
+    # PRIMEIRA CHAMADA AO MODELO
+    # --------------------------------------------------------
+
+    resposta_modelo = MODEL_PROVIDER.gerar(
+        modelo=modelo,
+        mensagens=mensagens_modelo,
+        temperatura=0.5,
+        ferramentas=ferramentas or None,
+    )
+
+    # --------------------------------------------------------
+    # PROCESSAMENTO DE TOOL CALLS
+    # --------------------------------------------------------
+
+    tool_calls = []
+
+    mensagem_resposta = resposta_modelo.get(
+        "message",
+        {},
+    )
+
+    if isinstance(mensagem_resposta, dict):
+        tool_calls = mensagem_resposta.get(
+            "tool_calls",
+            [],
+        ) or []
+
+    resultados_tools = []
+
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+
+        function_data = tool_call.get(
+            "function",
+            {},
+        )
+
+        if not isinstance(function_data, dict):
+            continue
+
+        ferramenta_id = function_data.get(
+            "name",
+        )
+
+        argumentos = function_data.get(
+            "arguments",
+            {},
+        )
+
+        if isinstance(argumentos, str):
+            try:
+                argumentos = json.loads(
+                    argumentos,
+                )
+            except json.JSONDecodeError:
+                argumentos = {}
+
+        if not isinstance(argumentos, dict):
+            argumentos = {}
+
+        if not ferramenta_id:
+            continue
+
+        try:
+            resultado = executar_ferramenta_autorizada(
+                contexto_id=contexto_id,
+                ferramenta_id=ferramenta_id,
+                argumentos=argumentos,
+            )
+
+            resultados_tools.append(
+                {
+                    "tool_call": tool_call,
+                    "resultado": resultado,
+                    "erro": None,
+                }
+            )
+
+        except Exception as erro:
+            resultados_tools.append(
+                {
+                    "tool_call": tool_call,
+                    "resultado": None,
+                    "erro": str(erro),
+                }
+            )
+
+    # --------------------------------------------------------
+    # SEGUNDA CHAMADA AO MODELO
+    # --------------------------------------------------------
+
+    resposta_final = resposta_modelo
+
+    if resultados_tools:
+        mensagem_assistente = {
+            "role": "assistant",
+            "content": mensagem_resposta.get(
+                "content",
+                "",
+            ),
+            "tool_calls": tool_calls,
+        }
+
+        mensagens_modelo.append(
+            mensagem_assistente,
+        )
+
+        for resultado_tool in resultados_tools:
+            tool_call = resultado_tool[
+                "tool_call"
+            ]
+
+            function_data = tool_call.get(
+                "function",
+                {},
+            )
+
+            ferramenta_id = function_data.get(
+                "name",
+                "",
+            )
+
+            resultado = resultado_tool[
+                "resultado"
+            ]
+
+            erro = resultado_tool[
+                "erro"
+            ]
+
+            if erro:
+                conteudo_tool = json.dumps(
+                    {
+                        "erro": erro,
+                    },
+                    ensure_ascii=False,
+                )
+
+            else:
+                try:
+                    conteudo_tool = json.dumps(
+                        resultado,
+                        ensure_ascii=False,
+                    )
+                except TypeError:
+                    conteudo_tool = str(
+                        resultado,
+                    )
+
+            mensagens_modelo.append(
+                {
+                    "role": "tool",
+                    "content": conteudo_tool,
+                    "name": ferramenta_id,
+                }
+            )
+
+        resposta_final = MODEL_PROVIDER.gerar(
+            modelo=modelo,
+            mensagens=mensagens_modelo,
+            temperatura=0.5,
+            ferramentas=ferramentas or None,
+        )
+
+    # --------------------------------------------------------
+    # CONTEÃšDO FINAL
+    # --------------------------------------------------------
+
+    mensagem_final = resposta_final.get(
+        "message",
+        {},
+    )
+
+    if isinstance(mensagem_final, dict):
+        conteudo_final = mensagem_final.get(
+            "content",
+            "",
+        )
+    else:
+        conteudo_final = ""
+
+    if not isinstance(
+        conteudo_final,
+        str,
+    ):
+        conteudo_final = str(
+            conteudo_final,
+        )
+
+    # --------------------------------------------------------
+    # PERSISTÃŠNCIA
+    # --------------------------------------------------------
+
+    mensagem_assistente_final = {
+        "role": "assistant",
+        "content": conteudo_final,
+        "model": modelo,
+        "skill": skill_id,
+        "route": rota.rota,
+        "confidence": rota.confianca,
+        "reason": rota.motivo,
+        "router_metadata": rota.metadata,
+        "plan": serializar_plano(plano),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    mensagens_chat.append(
+        mensagem_assistente_final,
+    )
+
+    chat["messages"] = mensagens_chat
+
+    chat["updated_at"] = (
+        datetime.now().isoformat()
+    )
+
+    storage.salvar_chat(
+        chat,
+    )
+
+    # --------------------------------------------------------
+    # SSE FINAL
+    # --------------------------------------------------------
+
+    yield (
+        "data: "
+        + json.dumps(
+            {
+                "type": "message",
+                "content": conteudo_final,
+                "model": modelo,
+                "route": rota.rota,
+                "skill": skill_id,
+                "confidence": rota.confianca,
+                "reason": rota.motivo,
+                "router_metadata": rota.metadata,
+                "plan": serializar_plano(plano),
+            },
+            ensure_ascii=False,
+        )
+        + "\n\n"
+    )
+
+    yield (
+        "data: "
+        + json.dumps(
+            {
+                "type": "done",
+                "chat_id": chat_id,
+            },
+            ensure_ascii=False,
+        )
+        + "\n\n"
+    )

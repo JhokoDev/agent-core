@@ -1,4 +1,4 @@
-from app.config import Settings
+from app.core.config import Settings
 from app.models.base import ModelProvider
 from app.models.ollama import OllamaProvider
 

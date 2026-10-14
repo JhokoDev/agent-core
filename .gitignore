@@ -1,12 +1,53 @@
-.env
-.env.*
-!.env.example
+# Ambientes Virtuais e Python
 .venv/
+venv/
+env/
 __pycache__/
 *.py[cod]
-.pytest_cache/
+*$py.class
 *.egg-info/
-build/
 dist/
-data/
+build/
+.pytest_cache/
+
+# Dependências Node.js
+node_modules/
+painel-core/node_modules/
+painel-web/node_modules/
+painel-core/dist/
+painel-web/dist/
+
+# Segredos e Configurações de Ambiente
+.env
+.env.local
+
+# Bancos de Dados e Runtime Caches Locais
+data/memory.db
+data/memory.db*
+data/browser_state.json
+data/browser_relay_state.json
+data/logs/
+data/chat_*.json
+data/test*.json
+data/*-*-*-*-*.json
+data/notas.json
+data/objetivos.json
+*.db
+*.sqlite3
+
+# Arquivos de Log e Execução
+server_log.txt
+launcher_log.txt
+dashboard_log.txt
 *.log
+
+# IDEs e Sistema Operacional
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporários e Uploads Locais
+uploads/
+agent-core-diagnostico/
+temp_audio_*

@@ -1,142 +1,175 @@
-# Instalação e primeira execução
+# 🛠️ Guia de Instalação e Configuração — Agent Core
 
-## 1. Inventário do servidor
+Este guia orienta a configuração completa do ambiente de desenvolvimento e execução do **Agent Core**, cobrindo o sistema operacional Windows (recomendado para automação nativa) e distribuições Linux/WSL.
 
-Não foi criada ou acessada uma VM nesta entrega. Em uma VM Linux existente, anote:
+---
 
-```bash
-uname -m
-python3 --version
-free -h
-df -h .
-```
+## 1. Requisitos de Sistema
 
-Requisitos: Python >=3.11 com venv/pip, Git recomendado e espaço para modelo e ambiente.
-Para Ubuntu com Python adequado, caso faltem ferramentas, o administrador pode instalar:
+### Ambiente Recomendado:
+* **Sistema Operacional:** Windows 10 ou 11 (64-bit) — *necessário para os recursos nativos do Windows MCP (Win32 e UIAutomation)*.
+* **Processador:** 4 núcleos ou superior.
+* **Memória RAM:** Mínimo de 8 GB (16 GB recomendado para execução simultânea do Ollama e IDEs).
+* **Python:** Versão 3.11 ou 3.12 (com `pip` atualizado e marcado para adicionar ao `PATH`).
+* **Node.js:** Versão 18.x ou 20.x LTS (com `npm`).
+* **Navegador:** Google Chrome atualizado.
 
-```bash
-sudo apt-get update
-sudo apt-get install python3-venv python3-pip git curl
-```
+---
 
-Não substitua o Python do sistema. Se for anterior a 3.11, use um sistema/ambiente compatível.
-O servidor foi escrito sem dependências específicas de x86, mas a instalação ARM64 está pendente.
+## 2. Preparação do Ambiente Python
 
-## 2. Preparar projeto
+No terminal (PowerShell ou Command Prompt):
 
-Extraia o pacote na pasta de trabalho da VM e entre em `personal-agent`:
+1. **Navegue até o diretório do projeto:**
+   ```powershell
+   cd C:\Projetos\agent-core-main
+   ```
 
-```bash
-bash scripts/setup_vm.sh
-source .venv/bin/activate
-python -m pytest -q
-```
+2. **Crie e ative um ambiente virtual (Opcional, porém recomendado):**
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   ```
 
-O script cria `.venv`, instala dependências e gera `.env`. Não altera `.env` existente,
-não usa sudo, não instala Ollama, não inicia serviço nem baixa modelo. Precisa de acesso ao PyPI.
-Se faltar rede/dependência, termina com erro; não considere a instalação concluída.
-As versões estão limitadas no pyproject, mas ainda não fixadas por um lock testado.
-Após teste aprovado, registre o ambiente específico:
+3. **Instale as dependências principais:**
+   ```powershell
+   pip install -r requirements.txt
+   ```
 
-```bash
-python -m pip freeze --exclude-editable > installed-versions.txt
-```
+4. **Instale os pacotes de automação e comunicação nativa:**
+   ```powershell
+   pip install pywin32 uiautomation pywinauto comtypes pyautogui websockets watchdog
+   ```
 
-Não trate esse inventário como lock universal para outras plataformas/Python.
+---
 
-## 3. Ollama na VM
+## 3. Preparação do Frontend (`painel-core`)
 
-Siga a [documentação oficial Linux](https://docs.ollama.com/linux).
-Para inspecionar o instalador antes de executá-lo:
+O painel de controle e chat em tempo real utiliza React 18 com Vite:
 
-```bash
-curl -fsSL https://ollama.com/install.sh -o /tmp/personal-agent-ollama-install.sh
-less /tmp/personal-agent-ollama-install.sh
-sh /tmp/personal-agent-ollama-install.sh
-ollama --version
-```
+1. **Acesse a pasta do frontend:**
+   ```powershell
+   cd painel-core
+   ```
 
-O instalador pode solicitar privilégios administrativos. Se usar systemd, configure com
-`sudo systemctl edit ollama`:
+2. **Instale as dependências do Node.js:**
+   ```powershell
+   npm install
+   ```
 
-```ini
-[Service]
-Environment="OLLAMA_HOST=127.0.0.1:11434"
-Environment="OLLAMA_NO_CLOUD=1"
-Environment="OLLAMA_NUM_PARALLEL=1"
-```
+3. **Retorne à raiz:**
+   ```powershell
+   cd ..
+   ```
 
-Depois:
+---
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
-ollama pull qwen3.5:2b
-ollama list
-personal-agent doctor
-personal-agent smoke-model
-```
+## 4. Configuração do Modelo Local (Ollama)
 
-Não abra portas 11434/8000 na internet. O serviço Ollama executa na VM; o PC Windows não precisa
-carregar o modelo. Se não houver systemd, use uma sessão separada para `ollama serve`, com
-`OLLAMA_HOST=127.0.0.1:11434` e `OLLAMA_NO_CLOUD=1` no ambiente.
+O Agent Core é otimizado para executar com inferência local rápida e privada via Ollama:
 
-O comando de inferência usa uma pergunta fixa e mostra a resposta. Sem resposta/timeout, ele falha.
-Meça tempo e memória antes de testar 4B. A presença em `ollama list` não prova inferência funcional.
-O limite de saída curto pode ser insuficiente para modelos com raciocínio; se retornar resposta vazia,
-registre o erro e ajuste limites em `.env`, sem presumir qualidade só pela execução.
+1. **Instale o Ollama:**
+   * Baixe e instale o executável oficial para Windows em [ollama.com](https://ollama.com).
+2. **Baixe os modelos recomendados:**
+   ```powershell
+   # Modelo principal leve e rápido (padrão)
+   ollama pull llama3.2:1b
 
-## 4. API
+   # Modelo opcional para tarefas de código
+   ollama pull qwen2.5-coder:1.5b
+   ```
+3. O serviço do Ollama roda por padrão em `http://127.0.0.1:11434`.
 
-Na raiz do projeto, com `.venv` ativado:
+---
 
-```bash
-personal-agent serve
-```
+## 5. Configuração das Variáveis de Ambiente (`.env`)
 
-Em outro terminal:
-
-```bash
-curl --fail http://127.0.0.1:8000/health
-```
-
-Teste readiness sem imprimir o token e sem colocá-lo nos argumentos do curl:
-
-```bash
-.venv/bin/python - <<'PYTHON'
-import httpx
-from app.config import Settings
-settings = Settings()
-response = httpx.get('http://127.0.0.1:8000/ready',
-    headers={'Authorization': 'Bearer ' + settings.api_token.get_secret_value()},
-    trust_env=False, timeout=10)
-print(response.status_code, response.json())
-raise SystemExit(0 if response.status_code == 200 else 1)
-PYTHON
-```
-
-HTTP 401 = token incorreto/ausente; 503 = banco/modelo indisponível; 200 = dependências detectadas.
-Não existe `/chat` nesta fase. Use `smoke-model` somente para validar a inferência.
-
-## 5. Windows
-
-Execute no PowerShell, na pasta extraída, se a política local permitir:
+Copie o arquivo de exemplo na raiz do projeto:
 
 ```powershell
-.\scripts\preflight_windows.ps1
+copy .env.example .env
 ```
 
-O script somente informa presença de ferramentas. Não mude a política de execução da instituição
-para rodá-lo. Se bloqueado, faça manualmente `Get-Command py, git, tailscale, kicad-cli`.
-Anote versão instalada do KiCad, Python e Windows para a Fase 5. Nada foi instalado no seu PC.
+Abra o arquivo `.env` para ajustar conforme sua necessidade:
+```ini
+AGENT_API_TOKEN=sua_chave_secreta_aqui
+AGENT_DATA_DIR=./data
+AGENT_HOST=127.0.0.1
+AGENT_PORT=8000
+AGENT_MODEL_PROVIDER=ollama
+AGENT_OLLAMA_URL=http://127.0.0.1:11434
+AGENT_MODEL=llama3.2:1b
+AGENT_CONTEXT_WINDOW=4096
+AGENT_MAX_OUTPUT_TOKENS=1024
+```
 
-## 6. Serviço e aceitação
+---
 
-O template `deploy/personal-agent.service` é opcional e ainda não testado em systemd real.
-Antes de instalá-lo: criar usuário de serviço sem privilégios, preparar `/opt/personal-agent`,
-instalar dependências ali, executar bootstrap como esse usuário e ajustar dono/permissões de
-`.env` e `data`. Não copiar o template sem adequar User/WorkingDirectory/ExecStart/ReadWritePaths.
-Use inicialmente execução manual até todos os critérios de `FASE_0.md` passarem.
+## 6. Configuração da Extensão do Chrome
 
-O ZIP não inclui `.git`; setup_vm.sh inicializa um repositório se necessário. Nenhum remote ou
-commit é criado automaticamente. Nunca adicione `.env`, bancos ou logs ao repositório.
+1. Abra o Google Chrome e digite na barra de navegação:
+   ```text
+   chrome://extensions/
+   ```
+2. No canto superior direito, ative a chave **"Modo do desenvolvedor"**.
+3. Clique em **"Carregar sem compactação"**.
+4. Selecione a pasta:
+   ```text
+   C:\Projetos\agent-core-main\browser-extension
+   ```
+5. A extensão se conectará automaticamente ao Launcher do Agent Core via WebSocket.
+
+---
+
+## 7. Inicialização do Sistema
+
+### Opção A: Execução em 1 Clique (Scripts Batch)
+
+* **Iniciar o Backend Principal (Porta 8000):**
+  Dê duplo clique em **`ligar.bat`**. O servidor iniciará em background e os logs serão gravados em `server_log.txt`.
+* **Iniciar o Launcher (Porta 8001) e o Painel Web (Porta 3000):**
+  Dê duplo clique em **`start_services.bat`**.
+* **Encerrar Todos os Serviços:**
+  Dê duplo clique em **`desligar.bat`**.
+
+---
+
+### Opção B: Execução Manual via Terminal
+
+Abra 3 terminais separados:
+
+* **Terminal 1 — Backend Core:**
+  ```powershell
+  python -u -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --env-file .env
+  ```
+
+* **Terminal 2 — Launcher & WebSocket Relay:**
+  ```powershell
+  python -m uvicorn launcher:app --host 0.0.0.0 --port 8001
+  ```
+
+* **Terminal 3 — Painel Web:**
+  ```powershell
+  cd painel-core
+  npm run dev
+  ```
+
+Abra o navegador em: **`http://localhost:3000`**.
+
+---
+
+## 8. Verificação de Saúde (Smoke Tests)
+
+Para confirmar se todos os serviços estão saudáveis, execute no terminal:
+
+```powershell
+# 1. Teste de resposta do Backend
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/chats" -Headers @{ "Authorization" = "Bearer sua_chave_secreta_aqui" }
+
+# 2. Teste do Launcher
+Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/system/status"
+
+# 3. Teste do Registro de Ferramentas
+python -c "from app.tools.tool_registry import criar_registry_padrao; r = criar_registry_padrao(); print('Tools ativas:', len(r._ferramentas))"
+```
+Deve retornar 20 ferramentas ativas sem erros.

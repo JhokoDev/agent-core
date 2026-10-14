@@ -1,0 +1,22 @@
+{
+  "youtube.com": {
+    "name": "YouTube",
+    "search_input": "input#search, input[name='search_query']",
+    "search_button": "#search-icon-legacy, button#search-button",
+    "first_video": "ytd-video-renderer a#thumbnail, ytd-rich-item-renderer a#thumbnail, a#video-title-link",
+    "media_player": "#movie_player",
+    "play_pause_button": ".ytp-play-button",
+    "last_updated": "2026-10-14T10:10:00"
+  },
+  "google.com": {
+    "name": "Google Search",
+    "search_input": "textarea[name='q'], input[name='q']",
+    "first_result": "#search a h3, a h3",
+    "last_updated": "2026-10-14T10:10:00"
+  },
+  "github.com": {
+    "name": "GitHub",
+    "search_input": "[data-target='qbsearch-input.inputButton'], input[name='query-builder-test']",
+    "last_updated": "2026-10-14T10:10:00"
+  }
+}

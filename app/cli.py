@@ -3,8 +3,8 @@ import asyncio
 import json
 import sys
 from pydantic import ValidationError
-from app.config import Settings
-from app.database import Database
+from app.core.config import Settings
+from app.infrastructure.database import Database
 from app.models.base import Message, ProviderError
 from app.models.registry import create_provider
 

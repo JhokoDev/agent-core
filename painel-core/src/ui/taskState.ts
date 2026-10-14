@@ -1,0 +1,2 @@
+export const taskLabels:Record<string,string>={idle:'Pronto',observing:'Observando a tela',executing:'Executando seu pedido',waiting:'Aguardando uma condição ou autorização',paused:'Pausado',completed:'Concluído',failed:'Não consegui concluir',disconnected:'Computador desconectado'};
+export const permissionLabels:Record<string,string>={observe:'Permitir que o Harvey veja a tela',control:'Permitir cliques e digitação',vision:'Permitir análise da imagem pelo modelo'};

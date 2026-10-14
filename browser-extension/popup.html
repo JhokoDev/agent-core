@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Harvey & Playwright MCP</title>
+  <style>
+    :root {
+      --bg: #121316;
+      --card: #1c1d22;
+      --border: #2d3039;
+      --text: #e2e4ea;
+      --muted: #9ba1b0;
+      --accent: #3b82f6;
+      --green: #22c55e;
+      --red: #ef4444;
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
+    .header h2 {
+      margin: 0;
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge.connected {
+      background: rgba(34, 197, 94, 0.15);
+      color: var(--green);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+    .badge.disconnected {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--red);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+    .connected .dot { background: var(--green); }
+    .disconnected .dot { background: var(--red); }
+    
+    .field {
+      margin-bottom: 10px;
+    }
+    .field label {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .field input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 7px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font-size: 12px;
+      font-family: monospace;
+    }
+    .btn {
+      width: 100%;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 6px;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .info {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.4;
+      margin-top: 12px;
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h2>Playwright MCP Bridge</h2>
+    <div id="statusBadge" class="badge disconnected">
+      <span class="dot"></span>
+      <span id="statusText">Desconectado</span>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Servidor Agent Core (Relay)</label>
+    <input type="text" id="serverUrl" value="http://127.0.0.1:8001" />
+  </div>
+
+  <div class="field">
+    <label>Token MCP Oficial</label>
+    <input type="text" id="token" value="PqBeTC3OO69SHxZ2RBsb57AIwkXuoUIJbUdsnnpyf-Y" />
+  </div>
+
+  <div class="field">
+    <label>Código de Pareamento</label>
+    <input type="text" id="pairCode" value="AGENT-CORE" />
+  </div>
+
+  <button class="btn" id="btnConnect">Salvar & Sincronizar</button>
+  <button class="btn btn-secondary" id="btnCheckTabs">Atualizar Abas Conectadas</button>
+
+  <div class="info">
+    Conectado ao Agent Core na porta 8001. Permite ao modelo interagir com abas, ler textos e controlar reprodução multimídia sem comandos de terminal.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
