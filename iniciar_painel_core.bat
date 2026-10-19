@@ -1,5 +1,5 @@
 @echo off
-cd /d C:\Projetos\agent-core-main\painel-core
+cd /d %~dp0painel-core
 echo ===================================================
 echo   Iniciando Novo Painel Core (Inspirado no Harvey)
 echo   Porta: http://localhost:3000
