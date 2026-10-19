@@ -110,7 +110,16 @@ export const api: HarveyApi = {
   },
 
   exportData: async () => {
-    const notes = JSON.parse(localStorage.getItem('agent_core_notes') || '[]');
+    let notes = [];
+    try {
+      const res = await fetch('/api/notas?limit=1000');
+      if (res.ok) {
+        const data = await res.json();
+        notes = data.notes || [];
+      }
+    } catch {
+      notes = JSON.parse(localStorage.getItem('agent_core_notes') || '[]');
+    }
     let chats: unknown[] = [];
     try {
       const res = await fetch('/api/chats');
@@ -228,6 +237,34 @@ export const api: HarveyApi = {
   },
 
   notes: async (query: string, _signal?: AbortSignal, offset = 0) => {
+    // Sincronização automática de notas legadas do localStorage para o backend
+    try {
+      const localLegacy = JSON.parse(localStorage.getItem('agent_core_notes') || '[]');
+      if (Array.isArray(localLegacy) && localLegacy.length > 0) {
+        for (const item of localLegacy) {
+          if (item?.text) {
+            await fetch('/api/notas', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: item.text }),
+            }).catch(() => {});
+          }
+        }
+        localStorage.removeItem('agent_core_notes');
+      }
+    } catch {}
+
+    try {
+      const url = new URL('/api/notas', window.location.origin);
+      if (query.trim()) url.searchParams.set('q', query.trim());
+      url.searchParams.set('offset', String(offset));
+      url.searchParams.set('limit', '20');
+      const res = await fetch(url.toString(), { signal: _signal });
+      if (res.ok) {
+        return res;
+      }
+    } catch {}
+
     const stored = JSON.parse(localStorage.getItem('agent_core_notes') || '[]');
     const filtered = query.trim()
       ? stored.filter((n: { text: string }) => n.text.toLowerCase().includes(query.toLowerCase()))
@@ -239,6 +276,15 @@ export const api: HarveyApi = {
   },
 
   addNote: async (text: string) => {
+    try {
+      const res = await fetch('/api/notas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (res.ok) return res;
+    } catch {}
+
     const stored = JSON.parse(localStorage.getItem('agent_core_notes') || '[]');
     const newNote = { id: Date.now(), text, created_at: Math.floor(Date.now() / 1000) };
     stored.unshift(newNote);
@@ -247,6 +293,15 @@ export const api: HarveyApi = {
   },
 
   updateNote: async (id: number, text: string) => {
+    try {
+      const res = await fetch(`/api/notas/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (res.ok) return res;
+    } catch {}
+
     const stored = JSON.parse(localStorage.getItem('agent_core_notes') || '[]');
     const idx = stored.findIndex((n: { id: number }) => n.id === id);
     if (idx !== -1) {
@@ -257,6 +312,13 @@ export const api: HarveyApi = {
   },
 
   deleteNote: async (id: number) => {
+    try {
+      const res = await fetch(`/api/notas/${id}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) return res;
+    } catch {}
+
     const stored = JSON.parse(localStorage.getItem('agent_core_notes') || '[]');
     const filtered = stored.filter((n: { id: number }) => n.id !== id);
     localStorage.setItem('agent_core_notes', JSON.stringify(filtered));

@@ -84,3 +84,49 @@ async def transcrever(arquivo: UploadFile = File(...)):
         return {"texto": texto_extraido}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Falha ao processar áudio: {e}")
+
+# ==========================================================
+# ROTAS DE NOTAS (Unificadas com Capability Hub)
+# ==========================================================
+
+from app.services.capability_hub_service import capability_hub
+
+@app.get("/notas")
+@app.get("/api/notas")
+async def listar_notas_fastapi(q: str = None, query: str = None, offset: int = 0, limit: int = 20):
+    termo = q or query
+    if termo:
+        res = capability_hub.gerenciar_nota(acao="pesquisar", query=termo, offset=offset, limit=limit)
+    else:
+        res = capability_hub.gerenciar_nota(acao="listar", offset=offset, limit=limit)
+    return {"notes": res.get("notas", []), "total": res.get("total", 0)}
+
+@app.post("/notas")
+@app.post("/api/notas")
+async def criar_nota_fastapi(payload: dict):
+    texto = (payload.get("text") or payload.get("texto") or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="Texto da nota é obrigatório.")
+    res = capability_hub.gerenciar_nota(acao="salvar", texto=texto)
+    if res.get("sucesso"):
+        return res.get("nota")
+    raise HTTPException(status_code=500, detail=res.get("erro", "Erro ao salvar nota."))
+
+@app.put("/notas/{nota_id}")
+@app.put("/api/notas/{nota_id}")
+async def atualizar_nota_fastapi(nota_id: int, payload: dict):
+    texto = (payload.get("text") or payload.get("texto") or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="Texto da nota é obrigatório.")
+    res = capability_hub.gerenciar_nota(acao="editar", texto=texto, nota_id=nota_id)
+    if res.get("sucesso"):
+        return {"ok": True, "note": res.get("nota")}
+    raise HTTPException(status_code=404, detail=res.get("erro", "Nota não encontrada."))
+
+@app.delete("/notas/{nota_id}")
+@app.delete("/api/notas/{nota_id}")
+async def excluir_nota_fastapi(nota_id: int):
+    res = capability_hub.gerenciar_nota(acao="excluir", nota_id=nota_id)
+    if res.get("sucesso"):
+        return {"ok": True, "status": "removido", "id": nota_id}
+    raise HTTPException(status_code=404, detail="Nota não encontrada.")

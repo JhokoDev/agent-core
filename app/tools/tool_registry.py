@@ -617,13 +617,14 @@ def criar_registry_padrao() -> ToolRegistry:
         ToolContract(
             id="gerenciar_notas",
             nome="Gerenciar Notas",
-            descricao="Salva notas por voz ou texto, pesquisa, lista e consulta a última nota.",
+            descricao="Salva notas por voz ou texto, pesquisa, lista, consulta a última nota, edita ou exclui notas.",
             categoria="notas",
             risco="baixo",
             argumentos={
-                "acao": {"tipo": "string", "obrigatorio": True, "descricao": "'salvar', 'listar', 'ultima', 'pesquisar'."},
+                "acao": {"tipo": "string", "obrigatorio": True, "descricao": "'salvar', 'listar', 'ultima', 'pesquisar', 'editar', 'excluir'."},
                 "texto": {"tipo": "string", "obrigatorio": False, "descricao": "Texto da nota."},
-                "query": {"tipo": "string", "obrigatorio": False, "descricao": "Termo de busca."}
+                "query": {"tipo": "string", "obrigatorio": False, "descricao": "Termo de busca."},
+                "nota_id": {"tipo": "integer", "obrigatorio": False, "descricao": "ID da nota (necessário para editar ou excluir)."}
             },
             requer_confirmacao=False,
             handler=notas.executar,

@@ -7,6 +7,7 @@ import psutil
 import urllib.request
 import shutil
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
@@ -37,8 +38,9 @@ CAMINHO_SKILLS.mkdir(exist_ok=True)
 CAMINHO_UPLOADS.mkdir(exist_ok=True)
 CAMINHO_DATA_MEMORY.mkdir(parents=True, exist_ok=True)
 
-# Ficheiro de configuração global
+# Ficheiro de configuração global e notas
 ARQUIVO_CONFIG = CAMINHO_DADOS / "config.json"
+ARQUIVO_NOTAS = CAMINHO_DADOS / "notas.json"
 
 CONFIG_PADRAO = {
     "modelo_ativo": "llama3.2:1b",
@@ -430,6 +432,75 @@ def deletar_chat_launcher(chat_id: str):
             except Exception:
                 pass
     return {"status": "nao_encontrado"}
+
+# ==========================================================
+# GESTÃO DE NOTAS UNIFICADA (Memória Local e Painel Web)
+# ==========================================================
+
+def carregar_notas_launcher() -> list:
+    if ARQUIVO_NOTAS.exists():
+        try:
+            with ARQUIVO_NOTAS.open("r", encoding="utf-8") as f:
+                dados = json.load(f)
+                if isinstance(dados, list):
+                    return dados
+        except Exception:
+            return []
+    return []
+
+def salvar_notas_launcher(notas: list) -> None:
+    CAMINHO_DADOS.mkdir(exist_ok=True)
+    with ARQUIVO_NOTAS.open("w", encoding="utf-8") as f:
+        json.dump(notas, f, ensure_ascii=False, indent=2)
+
+@app.get("/api/notas")
+def listar_notas_launcher(q: str = None, query: str = None, offset: int = 0, limit: int = 20):
+    termo = (q or query or "").strip().lower()
+    notas = carregar_notas_launcher()
+    if termo:
+        notas = [n for n in notas if termo in str(n.get("text", "")).lower()]
+    total = len(notas)
+    slice_notas = notas[offset:offset+limit] if limit > 0 else notas
+    return {"notes": slice_notas, "total": total}
+
+@app.post("/api/notas")
+def criar_nota_launcher(payload: dict):
+    texto = (payload.get("text") or payload.get("texto") or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="Texto da nota é obrigatório.")
+    notas = carregar_notas_launcher()
+    nova_nota = {
+        "id": int(time.time() * 1000),
+        "text": texto,
+        "created_at": int(time.time())
+    }
+    notas.insert(0, nova_nota)
+    salvar_notas_launcher(notas)
+    return nova_nota
+
+@app.put("/api/notas/{nota_id}")
+def atualizar_nota_launcher(nota_id: int, payload: dict):
+    texto = (payload.get("text") or payload.get("texto") or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="Texto da nota é obrigatório.")
+    notas = carregar_notas_launcher()
+    for n in notas:
+        if n.get("id") == nota_id:
+            n["text"] = texto
+            n["updated_at"] = int(time.time())
+            salvar_notas_launcher(notas)
+            return {"ok": True, "note": n}
+    raise HTTPException(status_code=404, detail="Nota não encontrada.")
+
+@app.delete("/api/notas/{nota_id}")
+def excluir_nota_launcher(nota_id: int):
+    notas = carregar_notas_launcher()
+    tam_antes = len(notas)
+    notas = [n for n in notas if n.get("id") != nota_id]
+    if len(notas) == tam_antes:
+        raise HTTPException(status_code=404, detail="Nota não encontrada.")
+    salvar_notas_launcher(notas)
+    return {"ok": True, "status": "removido", "id": nota_id}
 
 @app.post("/api/client-events")
 def receber_client_events(evento: dict):

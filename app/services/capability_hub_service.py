@@ -101,7 +101,7 @@ class CapabilityHubService:
         with open(NOTES_FILE, "w", encoding="utf-8") as f:
             json.dump(notas, f, ensure_ascii=False, indent=2)
 
-    def gerenciar_nota(self, acao: str, texto: Optional[str] = None, query: Optional[str] = None, nota_id: Optional[int] = None) -> Dict[str, Any]:
+    def gerenciar_nota(self, acao: str, texto: Optional[str] = None, query: Optional[str] = None, nota_id: Optional[int] = None, offset: int = 0, limit: int = 20) -> Dict[str, Any]:
         notas = self.carregar_notas()
         
         if acao == "salvar" and texto:
@@ -115,7 +115,9 @@ class CapabilityHubService:
             return {"sucesso": True, "acao": "salvar", "nota": nova}
 
         elif acao == "listar":
-            return {"sucesso": True, "total": len(notas), "notas": notas[:20]}
+            total = len(notas)
+            slice_notas = notas[offset:offset+limit] if limit > 0 else notas
+            return {"sucesso": True, "total": total, "notas": slice_notas}
 
         elif acao == "ultima":
             ultima = notas[0] if notas else None
@@ -124,7 +126,17 @@ class CapabilityHubService:
         elif acao == "pesquisar" and query:
             termo = query.lower().strip()
             filtradas = [n for n in notas if termo in n.get("text", "").lower()]
-            return {"sucesso": True, "query": query, "total": len(filtradas), "notas": filtradas}
+            slice_filtradas = filtradas[offset:offset+limit] if limit > 0 else filtradas
+            return {"sucesso": True, "query": query, "total": len(filtradas), "notas": slice_filtradas}
+
+        elif acao in ("editar", "atualizar") and nota_id and texto:
+            for n in notas:
+                if n.get("id") == nota_id:
+                    n["text"] = texto.strip()
+                    n["updated_at"] = int(time.time())
+                    self.salvar_notas(notas)
+                    return {"sucesso": True, "acao": "editar", "nota": n}
+            return {"sucesso": False, "erro": f"Nota com ID {nota_id} não encontrada."}
 
         elif acao == "excluir" and nota_id:
             notas = [n for n in notas if n.get("id") != nota_id]

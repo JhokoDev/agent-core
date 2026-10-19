@@ -887,7 +887,14 @@ class FerramentaGerenciarNotas(FerramentaBase):
         acao = argumentos.get("acao", "listar").lower().strip()
         texto = argumentos.get("texto")
         query = argumentos.get("query")
-        res = capability_hub.gerenciar_nota(acao=acao, texto=texto, query=query)
+        nota_id = argumentos.get("nota_id")
+        if nota_id is not None:
+            try:
+                nota_id = int(nota_id)
+            except (ValueError, TypeError):
+                nota_id = None
+
+        res = capability_hub.gerenciar_nota(acao=acao, texto=texto, query=query, nota_id=nota_id)
         if acao == "salvar":
             return f"Sucesso: Nota salva com o conteúdo: '{texto}'"
         elif acao == "ultima":
@@ -895,10 +902,18 @@ class FerramentaGerenciarNotas(FerramentaBase):
             return f"Última nota: {nota.get('text')}" if nota else "Nenhuma nota registrada."
         elif acao == "listar":
             notas = res.get("notas", [])
-            return f"Total de {res.get('total')} notas. Principais: " + "; ".join([n['text'] for n in notas[:5]])
+            return f"Total de {res.get('total')} notas. Principais: " + "; ".join([f"[{n.get('id')}] {n.get('text')}" for n in notas[:5]])
         elif acao == "pesquisar":
             notas = res.get("notas", [])
-            return f"Encontradas {len(notas)} notas para '{query}': " + "; ".join([n['text'] for n in notas[:3]])
+            return f"Encontradas {len(notas)} notas para '{query}': " + "; ".join([f"[{n.get('id')}] {n.get('text')}" for n in notas[:3]])
+        elif acao in ("editar", "atualizar"):
+            if res.get("sucesso"):
+                return f"Nota [{nota_id}] atualizada com sucesso para: '{texto}'"
+            return f"Erro ao atualizar nota: {res.get('erro')}"
+        elif acao == "excluir":
+            if res.get("sucesso"):
+                return f"Nota [{nota_id}] excluída com sucesso."
+            return f"Erro ao excluir nota: {res.get('erro')}"
         return "Operação de nota realizada com sucesso."
 
 
