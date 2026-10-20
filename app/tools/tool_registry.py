@@ -20,6 +20,8 @@ from app.tools.tools import (
     FerramentaGerenciarJanelasWindows,
     FerramentaAmbienteTrabalho,
     FerramentaOrganizarArquivos,
+    FerramentaGerenciarLifeOS,
+    FerramentaConsultorFinanceiroLifeOS,
     ACOES_PERMITIDAS,
     CHAVES_ACOES,
 )
@@ -708,4 +710,101 @@ def criar_registry_padrao() -> ToolRegistry:
         )
     )
 
-    return registry
+
+    # ----------------------------------------------------------
+    # Life OS: Tarefas & Escalonamento Proativo
+    # ----------------------------------------------------------
+    ferramenta_life = FerramentaGerenciarLifeOS()
+    registry.registrar(
+        ToolContract(
+            id="gerenciar_life_os",
+            nome="Gerenciar Life OS (Tarefas)",
+            descricao="Gerencia tarefas, horários e compromissos do usuário no Life OS diretamente pelo chat.",
+            categoria="produtividade",
+            risco="baixo",
+            argumentos={
+                "acao": {
+                    "tipo": "string",
+                    "obrigatorio": True,
+                    "descricao": "Ação a executar: 'criar_tarefa', 'listar_tarefas', 'adiar_tarefa', 'concluir_tarefa'."
+                },
+                "titulo": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Título conciso da tarefa."
+                },
+                "horario": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Horário previsto no formato HH:MM (ex: '17:00')."
+                },
+                "criticidade": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Nível de criticidade: 'rotina', 'importante', 'critica'."
+                },
+                "motivo": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Motivo do adiamento, se for adiar."
+                },
+                "tarefa_id": {
+                    "tipo": "number",
+                    "obrigatorio": False,
+                    "descricao": "ID numérico da tarefa para adiar ou concluir."
+                },
+                "prova": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Evidência / resumo da conclusão."
+                }
+            },
+            requer_confirmacao=False,
+            handler=ferramenta_life.executar,
+        )
+    )
+
+    # ----------------------------------------------------------
+    # Life OS: Consultoria Financeira & Gestão de Caixas
+    # ----------------------------------------------------------
+    ferramenta_financas = FerramentaConsultorFinanceiroLifeOS()
+    registry.registrar(
+        ToolContract(
+            id="gerenciar_financas_life_os",
+            nome="Consultor Financeiro Life OS",
+            descricao="Registra gastos, receitas, consulta o saldo das 4 caixas e avalia o impacto de compras no patrimônio e teto diário.",
+            categoria="financas",
+            risco="baixo",
+            argumentos={
+                "acao": {
+                    "tipo": "string",
+                    "obrigatorio": True,
+                    "descricao": "Ação: 'registrar_gasto', 'registrar_receita', 'consultar_saldo', 'pedagio_compra'."
+                },
+                "valor": {
+                    "tipo": "number",
+                    "obrigatorio": False,
+                    "descricao": "Valor monetário em reais (ex: 45.00)."
+                },
+                "descricao": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Descrição do gasto ou da receita (ex: 'almoço', 'salário', 'uber')."
+                },
+                "categoria": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Caixa de destino: 'livre_lazer', 'custos_fixos', 'construcao_futuro', 'autoaperfeicoamento'."
+                },
+                "item": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Nome do produto pretendido caso vá avaliar um pedágio de compra."
+                }
+            },
+            requer_confirmacao=False,
+            handler=ferramenta_financas.executar,
+        )
+    )
+
+    return registry

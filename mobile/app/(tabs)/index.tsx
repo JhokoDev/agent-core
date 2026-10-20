@@ -27,6 +27,31 @@ export default function CockpitScreen() {
   const [proofText, setProofText] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Entrada Rápida de Atividades (Inbox Cognitivo)
+  const [quickInput, setQuickInput] = useState('');
+  const [quickSubmitting, setQuickSubmitting] = useState(false);
+
+  const handleQuickSubmit = async () => {
+    if (!quickInput.trim()) return;
+    try {
+      setQuickSubmitting(true);
+      const res = await agentApi.enviarInbox(quickInput.trim());
+      if (res.status === 'criado') {
+        Alert.alert('✅ Registrado com Sucesso!', res.feedback || 'Atividade adicionada ao seu Life OS.');
+        setQuickInput('');
+        carregarDados();
+      } else if (res.status === 'aguardando_confirmacao') {
+        Alert.alert('⚠️ Ajuste Necessário', res.mensagem);
+      } else {
+        Alert.alert('Aviso', res.mensagem || 'Não foi possível processar a entrada.');
+      }
+    } catch (err: any) {
+      Alert.alert('Erro', err.message || 'Falha ao enviar para o Inbox.');
+    } finally {
+      setQuickSubmitting(false);
+    }
+  };
+
   const carregarDados = useCallback(async () => {
     try {
       const data = await agentApi.getDashboardStatus();
@@ -139,6 +164,29 @@ export default function CockpitScreen() {
           <Text style={styles.financeSpent}>Gastos hoje: R$ {financas.gastos_hoje.toFixed(2)}</Text>
         </View>
       )}
+
+      {/* Barra de Entrada Rápida de Atividades (Inbox Cognitivo) */}
+      <View style={styles.quickInputCard}>
+        <Text style={styles.quickInputLabel}>⚡ REGISTRO RÁPIDO · O QUE PRECISA FAZER?</Text>
+        <View style={styles.quickInputRow}>
+          <TextInput
+            style={styles.quickInputField}
+            placeholder="Ex: Entregar API às 18h sem falta / Estudar React"
+            placeholderTextColor="#64748b"
+            value={quickInput}
+            onChangeText={setQuickInput}
+            onSubmitEditing={handleQuickSubmit}
+            returnKeyType="send"
+          />
+          <TouchableOpacity
+            style={[styles.quickInputBtn, (!quickInput.trim() || quickSubmitting) && styles.quickInputBtnDisabled]}
+            onPress={handleQuickSubmit}
+            disabled={!quickInput.trim() || quickSubmitting}
+          >
+            <Text style={styles.quickInputBtnText}>{quickSubmitting ? '...' : 'Agendar'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
 
       {/* Seção das 3 Tarefas Críticas */}
       <View style={styles.sectionHeader}>
@@ -352,6 +400,37 @@ const styles = StyleSheet.create({
   financeValue: { color: '#10b981', fontSize: 22, fontWeight: '800', marginTop: 2 },
   financeValueAlert: { color: '#ef4444' },
   financeSpent: { color: '#64748b', fontSize: 12 },
+  quickInputCard: {
+    backgroundColor: '#121420',
+    borderColor: '#4338ca',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 20
+  },
+  quickInputLabel: { color: '#818cf8', fontSize: 10, fontWeight: '800', letterSpacing: 0.8, marginBottom: 8 },
+  quickInputRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  quickInputField: {
+    flex: 1,
+    backgroundColor: '#0c0e17',
+    borderColor: '#1e243d',
+    borderWidth: 1,
+    borderRadius: 10,
+    color: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13
+  },
+  quickInputBtn: {
+    backgroundColor: '#4f46e5',
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  quickInputBtnDisabled: { backgroundColor: '#312e81', opacity: 0.6 },
+  quickInputBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sectionTitle: { color: '#94a3b8', fontSize: 11, fontWeight: '700', letterSpacing: 1.2 },
   sectionBadge: { color: '#6366f1', fontSize: 12, fontWeight: '700' },

@@ -108,7 +108,10 @@ class OrchestratorService:
                     "pesquise", "pesquisar", "busca", "buscar", "notícia", "noticia", "notícias",
                     "tempo", "clima", "previsão", "previsao", "chuva", "temperatura",
                     "nota", "notas", "anote", "lembrete", "objetivo", "meta",
-                    "clique", "clicar", "digite", "digitar", "aba", "abas", "play", "pause", "mídia", "midia", "volume"
+                    "clique", "clicar", "digite", "digitar", "aba", "abas", "play", "pause", "mídia", "midia", "volume",
+                    "gastei", "comprei", "paguei", "ganhei", "receita", "despesa", "gasto", "saldo", "caixa", "caixas",
+                    "reserva", "dinheiro", "pedágio", "pedagio", "comprar", "tarefa", "tarefas", "agendar", "agende",
+                    "preciso", "fazer", "adiar", "concluir", "posso gastar", "quanto tenho"
                 ])
             )
 
@@ -154,7 +157,9 @@ class OrchestratorService:
                     "- Para previsão meteorológica e probabilidade de chuva, chame 'previsao_tempo'.\n"
                     "- Para notas e metas de conversa, chame 'gerenciar_notas' e 'gerenciar_objetivo'.\n"
                     "- Para hora atual e capacidades, chame 'obter_hora_atual' e 'obter_capacidades'.\n"
-                    "- Para cálculos matemáticos, chame 'calcular'."
+                    "- Para cálculos matemáticos, chame 'calcular'.\n"
+                    "- Para tarefas, compromissos diários e insistência Life OS, chame 'gerenciar_life_os' (acao='criar_tarefa', 'listar_tarefas', 'adiar_tarefa', 'concluir_tarefa').\n"
+                    "- Para finanças, registro de gastos/ganhos, consultar as 4 caixas e calcular pedágio anti-impulso, chame 'gerenciar_financas_life_os' (acao='registrar_gasto', 'registrar_receita', 'consultar_saldo', 'pedagio_compra').\n"
                 )
             else:
                 system_parts.append(
@@ -163,6 +168,38 @@ class OrchestratorService:
                 )
 
             if memoria_contexto: system_parts.append(f"\n{memoria_contexto}")
+
+            # Injeção de Contexto Real-time do Life OS e Finanças
+            try:
+                from app.services.life_os import life_os_service
+                status_life = life_os_service.obter_resumo_dashboard()
+                caixas_life = life_os_service.obter_saldo_caixas()
+
+                criticas_lista = [t['titulo'] + (f" ({t.get('horario_previsto')})" if t.get('horario_previsto') else "") for t in status_life.get('tarefas_criticas_hoje', [])]
+                criticas_str = ", ".join(criticas_lista) if criticas_lista else "Nenhuma tarefa crítica definida para hoje"
+
+                saldo_livre = caixas_life.get('saldo_diario_restante', 0.0)
+                gastos_hoje = caixas_life.get('gastos_hoje', 0.0)
+                teto_diario = caixas_life.get('teto_diario_livre', 50.0)
+                c_data = caixas_life.get('caixas', {})
+                reserva_metas = c_data.get('construcao_futuro', {}).get('saldo', 0.0)
+                caixa_lazer = c_data.get('livre_lazer', {}).get('saldo', 0.0)
+                custos_fixos = c_data.get('custos_fixos', {}).get('saldo', 0.0)
+
+                system_parts.append(
+                    f"\n[ESTADO EM TEMPO REAL DO LIFE OS & FINANÇAS]:\n"
+                    f"- Data de hoje: {status_life.get('data')}\n"
+                    f"- Top 3 Tarefas Críticas de Hoje: {criticas_str}\n"
+                    f"- Finanças de Hoje: Teto diário = R$ {teto_diario:.2f} | Gastos hoje = R$ {gastos_hoje:.2f} | Saldo livre restante hoje = R$ {saldo_livre:.2f}\n"
+                    f"- Saldos das Caixas: Reserva/Metas: R$ {reserva_metas:.2f} | Livre/Lazer: R$ {caixa_lazer:.2f} | Fixos: R$ {custos_fixos:.2f}\n"
+                    f"DIRETRIZES DE ASSISTÊNCIA INTEGRAL:\n"
+                    f"1. Você é o assistente pessoal integral e consultor estratégico. Sempre que o usuário mencionar gastos, ganhos ou compras, use 'gerenciar_financas_life_os' para registrar e avalie ativamente o impacto no teto diário e nas metas.\n"
+                    f"2. Se o usuário falar sobre compromissos ou tarefas a fazer, use 'gerenciar_life_os' para registrar com data/horário e sugira um micro-passo de 2 minutos para iniciar.\n"
+                    f"3. Dê conselhos reais e personalizados, nunca apenas respostas genéricas."
+                )
+            except Exception as e:
+                pass
+
 
             # Contexto em tempo real do navegador aberto (Google Chrome)
             try:

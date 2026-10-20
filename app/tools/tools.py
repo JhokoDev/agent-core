@@ -957,4 +957,140 @@ class FerramentaOrganizarArquivos(FerramentaBase):
         if res.get("sucesso"):
             return res.get("mensagem", "Downloads organizados.")
         return f"Erro: {res.get('erro', 'Falha ao organizar downloads.')}"
-
+
+
+
+# ============================================================
+# FERRAMENTAS — LIFE OS: TAREFAS PROATIVAS & CONSULTORIA FINANCEIRA
+# ============================================================
+
+class FerramentaGerenciarLifeOS(FerramentaBase):
+    """Permite ao assistente criar, listar, adiar e concluir tarefas diárias no Life OS diretamente pelo chat."""
+    def executar(self, argumentos: dict) -> str:
+        from app.services.life_os import life_os_service
+        acao = str(argumentos.get("acao", "criar_tarefa")).lower().strip()
+        titulo = str(argumentos.get("titulo", "")).strip()
+        horario = str(argumentos.get("horario", "")).strip()
+        criticidade = str(argumentos.get("criticidade", "rotina")).lower().strip()
+        motivo = str(argumentos.get("motivo", "")).strip()
+        tarefa_id = argumentos.get("tarefa_id")
+        prova = str(argumentos.get("prova", "")).strip()
+
+        try:
+            if acao in ("criar_tarefa", "agendar"):
+                if not titulo:
+                    return "Erro: Título da tarefa é obrigatório para agendamento."
+                dados = {
+                    "titulo": titulo,
+                    "criticidade": criticidade if criticidade in ("rotina", "importante", "critica") else "rotina",
+                    "horario_previsto": horario or None
+                }
+                res = life_os_service.criar_tarefa(dados)
+                micro = res.get("micro_step_sugerido") or "Dê o primeiro passo de 2 minutos."
+                crit_label = res.get("criticidade", "rotina").upper()
+                horario_label = res.get("horario_previsto") or "hoje"
+                return (
+                    f"Sucesso: Tarefa '{titulo}' agendada para {horario_label} (Nível: {crit_label})! "
+                    f"Micro-passo de 2 minutos sugerido: {micro}"
+                )
+
+            elif acao in ("listar_tarefas", "listar"):
+                tarefas = life_os_service.listar_tarefas(status="pendente")
+                if not tarefas:
+                    return "Você não tem nenhuma tarefa pendente no momento. Parabéns!"
+                linhas = [f"- [#{t['id']}] {t['titulo']} ({t.get('horario_previsto') or 'sem horário'}) [{t.get('criticidade')}]" for t in tarefas[:8]]
+                return "Tarefas pendentes:\n" + "\n".join(linhas)
+
+            elif acao in ("adiar_tarefa", "adiar"):
+                if not tarefa_id:
+                    return "Erro: O ID da tarefa é obrigatório para adiar."
+                res = life_os_service.adiar_tarefa(int(tarefa_id), motivo=motivo or "Adiado pelo chat", minutos=15)
+                return f"Sucesso: Tarefa #{tarefa_id} adiada em 15 minutos. Justificativa registrada: '{motivo}'."
+
+            elif acao in ("concluir_tarefa", "concluir"):
+                if not tarefa_id:
+                    return "Erro: O ID da tarefa é obrigatório para concluir."
+                res = life_os_service.concluir_tarefa(int(tarefa_id), prova=prova or "Concluído via conversa no chat")
+                return f"Sucesso: Parabéns! Tarefa #{tarefa_id} marcada como concluída e arquivada."
+
+            return f"Ação '{acao}' não suportada para gerenciar_life_os."
+        except Exception as e:
+            return f"Erro ao gerenciar tarefa no Life OS: {e}"
+
+
+class FerramentaConsultorFinanceiroLifeOS(FerramentaBase):
+    """Permite ao assistente registrar gastos, ganhos, consultar saldo das 4 caixas e dar conselhos de compra."""
+    def executar(self, argumentos: dict) -> str:
+        from app.services.life_os import life_os_service
+        acao = str(argumentos.get("acao", "consultar_saldo")).lower().strip()
+        valor = float(argumentos.get("valor") or 0.0)
+        descricao = str(argumentos.get("descricao", "")).strip()
+        categoria = str(argumentos.get("categoria", "livre_lazer")).lower().strip()
+        item = str(argumentos.get("item", "")).strip()
+
+        try:
+            if acao in ("registrar_gasto", "gasto", "despesa"):
+                if valor <= 0:
+                    return "Erro: Informe um valor numérico positivo para registrar o gasto."
+                res = life_os_service.finance.processar_notificacao_bancaria(
+                    app_origem="chat_assistente",
+                    texto=f"{descricao or 'Gasto'} - R$ {valor:.2f}",
+                    titulo=descricao or "Gasto Chat"
+                )
+                caixas = life_os_service.obter_saldo_caixas()
+                return (
+                    f"Sucesso: Gasto de R$ {valor:.2f} ('{descricao or 'Despesa'}') registrado! "
+                    f"Horas de vida/esforço equivalentes: {res.get('horas_vida', 0)}h. "
+                    f"Saldo livre restante hoje: R$ {caixas.get('saldo_diario_restante', 0):.2f}. "
+                    f"{'⚠️ ATENÇÃO: Teto diário estourado!' if caixas.get('saldo_diario_restante', 0) < 0 else 'Limite diário sob controle.'}"
+                )
+
+            elif acao in ("registrar_receita", "receita", "ganho", "ganhei"):
+                if valor <= 0:
+                    return "Erro: Informe um valor positivo para a receita."
+                tid = life_os_service.db.registrar_transacao(
+                    tipo="receita",
+                    valor=valor,
+                    categoria=categoria if categoria in ("custos_fixos", "construcao_futuro", "autoaperfeicoamento", "livre_lazer") else "construcao_futuro",
+                    descricao=descricao or "Entrada / Receita",
+                    origem="chat_assistente"
+                )
+                caixas = life_os_service.obter_saldo_caixas()
+                reserva = caixas.get("caixas", {}).get("construcao_futuro", {}).get("saldo", 0.0)
+                return (
+                    f"Sucesso: Entrada de R$ {valor:.2f} ('{descricao or 'Receita'}') registrada na caixa '{categoria}'! "
+                    f"Sua caixa Reserva & Metas agora possui R$ {reserva:.2f}."
+                )
+
+            elif acao in ("consultar_saldo", "saldo", "caixas", "consultar_caixas"):
+                caixas = life_os_service.obter_saldo_caixas()
+                c = caixas.get("caixas", {})
+                return (
+                    f"Diagnóstico Financeiro em Tempo Real:\n"
+                    f"- 🎯 Disponível para gastar hoje: R$ {caixas.get('saldo_diario_restante', 0):.2f} (Gastos hoje: R$ {caixas.get('gastos_hoje', 0):.2f} / Teto: R$ {caixas.get('teto_diario_livre', 50):.2f})\n"
+                    f"- 🍕 Caixa Livre/Lazer: R$ {c.get('livre_lazer', {}).get('saldo', 0):.2f}\n"
+                    f"- 🚀 Caixa Reserva & Metas de Longo Prazo: R$ {c.get('construcao_futuro', {}).get('saldo', 0):.2f}\n"
+                    f"- 🏢 Caixa Custos Fixos: R$ {c.get('custos_fixos', {}).get('saldo', 0):.2f}\n"
+                    f"- 📚 Caixa Estudos & Dev: R$ {c.get('autoaperfeicoamento', {}).get('saldo', 0):.2f}\n"
+                    f"- ⚠️ Multas por procrastinação acumuladas: R$ {caixas.get('multas_procrastinacao_total', 0):.2f}"
+                )
+
+            elif acao in ("pedagio_compra", "avaliar_compra", "posso_comprar"):
+                nome_alvo = item or descricao or "Item"
+                if valor <= 0:
+                    return "Erro: Informe o valor da compra para calcular o pedágio."
+                res = life_os_service.finance.calcular_pedagio_compra(valor_compra=valor, nome_item=nome_alvo)
+                caixas = life_os_service.obter_saldo_caixas()
+                saldo_lazer = caixas.get("caixas", {}).get("livre_lazer", {}).get("saldo", 0)
+                
+                impacto_lazer = ""
+                if valor > saldo_lazer:
+                    impacto_lazer = f" ⚠️ O valor (R$ {valor:.2f}) supera o seu saldo de Lazer livre (R$ {saldo_lazer:.2f}) e invadirá sua reserva de futuro ou custos fixos!"
+                else:
+                    impacto_lazer = f" ✅ O valor cabe no seu saldo de Lazer livre atual (R$ {saldo_lazer:.2f})."
+
+                return f"{res.get('conselho')}{impacto_lazer}"
+
+            return f"Ação '{acao}' não suportada para gerenciar_financas_life_os."
+        except Exception as e:
+            return f"Erro na consultoria financeira: {e}"

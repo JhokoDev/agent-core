@@ -107,6 +107,22 @@ export const agentApi = {
     return await res.json();
   },
 
+  // 1.1 Inbox Cognitivo Zero-Fricção (Entrada de texto livre ou voz)
+  async enviarInbox(texto: string, audioBase64?: string, forcarSemTrava: boolean = false): Promise<any> {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/inbox`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        texto,
+        audio_base64: audioBase64,
+        forcar_sem_trava: forcarSemTrava
+      })
+    });
+    if (!res.ok) throw new Error(`Erro no Inbox: HTTP ${res.status}`);
+    return await res.json();
+  },
+
   // 2. Tarefas
   async listarTarefas(params?: { status?: string; criticidade?: string; data?: string }): Promise<Tarefa[]> {
     const base = getApiBaseUrl();
