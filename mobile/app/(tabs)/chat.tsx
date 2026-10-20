@@ -14,6 +14,31 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { agentApi } from '../../src/services/api';
 import { ChatMessage } from '../../src/types';
 
+function sanitizeMessageText(text: string): string {
+  if (!text) return '';
+  if (!text.includes('data: {') && !text.includes('data:{')) {
+    return text;
+  }
+  let cleanText = '';
+  let fullMessage = '';
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) continue;
+    const jsonStr = trimmed.replace(/^data:\s*/, '').trim();
+    if (!jsonStr || jsonStr === '[DONE]') continue;
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (parsed.type === 'chunk' && parsed.content) {
+        cleanText += parsed.content;
+      } else if (parsed.type === 'message' && parsed.content) {
+        fullMessage = parsed.content;
+      }
+    } catch {}
+  }
+  return fullMessage || cleanText || text;
+}
+
 export default function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -26,6 +51,7 @@ export default function ChatScreen() {
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -52,14 +78,36 @@ export default function ChatScreen() {
 
     try {
       let accumulated = '';
-      await agentApi.enviarMensagem(texto, undefined, (chunk) => {
-        accumulated += chunk;
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMsgId ? { ...msg, content: accumulated } : msg
-          )
-        );
-      });
+      const response = await agentApi.enviarMensagem(
+        texto,
+        currentChatId || undefined,
+        (token) => {
+          accumulated += token;
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMsgId ? { ...msg, content: accumulated } : msg
+            )
+          );
+        }
+      );
+
+      if (response?.chatId) {
+        setCurrentChatId(response.chatId);
+      }
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMsgId
+            ? {
+                ...msg,
+                content: response.content || accumulated,
+                model: response.model,
+                route: response.route,
+                reasoning: response.reasoning
+              }
+            : msg
+        )
+      );
     } catch (err: any) {
       setMessages((prev) =>
         prev.map((msg) =>
@@ -75,6 +123,8 @@ export default function ChatScreen() {
 
   const renderMessage = ({ item }: { item: ChatMessage }) => {
     const isUser = item.role === 'user';
+    const displayContent = sanitizeMessageText(item.content);
+
     return (
       <View
         style={[
@@ -88,8 +138,16 @@ export default function ChatScreen() {
             isUser ? styles.userBubble : styles.agentBubble
           ]}
         >
+          {item.route && (
+            <View style={styles.routeBadge}>
+              <Text style={styles.routeBadgeText}>
+                {item.route} {item.model ? `· ${item.model}` : ''}
+              </Text>
+            </View>
+          )}
+
           <Text style={[styles.msgText, isUser ? styles.userText : styles.agentText]}>
-            {item.content || (sending && item.role === 'assistant' ? 'Pensando...' : '')}
+            {displayContent || (sending && item.role === 'assistant' ? 'Pensando...' : '')}
           </Text>
           <Text style={styles.msgTime}>{item.timestamp}</Text>
         </View>
@@ -203,5 +261,20 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   disabledBtn: { backgroundColor: '#312e81', opacity: 0.7 },
-  sendIcon: { color: '#ffffff', fontSize: 18, marginLeft: 2 }
+  sendIcon: { color: '#ffffff', fontSize: 18, marginLeft: 2 },
+  routeBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.3)'
+  },
+  routeBadgeText: {
+    color: '#60a5fa',
+    fontSize: 10,
+    fontWeight: '700'
+  }
 });

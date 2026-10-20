@@ -304,41 +304,111 @@ export const agentApi = {
     return data.texto || '';
   },
 
-  // 6. Envio de Mensagem para o Chat
+  // 6. Envio de Mensagem para o Chat (Stream SSE em partes com extração limpa de tokens)
   async enviarMensagem(
     texto: string,
     chatId?: string,
-    onChunk?: (chunk: string) => void
-  ): Promise<string> {
-    const base = getApiBaseUrl();
-    const res = await fetch(`${base}/chat`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({
-        texto,
-        chat_id: chatId
-      })
+    onChunk?: (tokenText: string) => void
+  ): Promise<{ content: string; chatId: string; model?: string; route?: string; reasoning?: string }> {
+    return new Promise((resolve, reject) => {
+      const base = getApiBaseUrl();
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${base}/chat`);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      if (API_TOKEN) {
+        xhr.setRequestHeader('Authorization', `Bearer ${API_TOKEN}`);
+      }
+
+      let seenIndex = 0;
+      let lineBuffer = '';
+      let accumulatedText = '';
+      let messageContent = '';
+      let responseChatId = chatId || '';
+      let responseMetadata: any = {};
+
+      const parseLines = (textChunk: string) => {
+        lineBuffer += textChunk;
+        const lines = lineBuffer.split('\n');
+        lineBuffer = lines.pop() || ''; // guarda linha incompleta
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line.startsWith('data:')) continue;
+          const jsonStr = line.replace(/^data:\s*/, '').trim();
+          if (!jsonStr || jsonStr === '[DONE]') continue;
+          try {
+            const data = JSON.parse(jsonStr);
+            if (data.chat_id) {
+              responseChatId = data.chat_id;
+            }
+            if (data.type === 'chunk' && data.content) {
+              accumulatedText += data.content;
+              if (onChunk) onChunk(data.content);
+            } else if (data.type === 'message') {
+              if (data.content) {
+                messageContent = data.content;
+              }
+              responseMetadata = {
+                model: data.model,
+                route: data.route,
+                reasoning: data.reasoning
+              };
+            }
+          } catch {
+            // Fragmento ainda em transmissão, continua acumulando
+          }
+        }
+      };
+
+      xhr.onprogress = () => {
+        const full = xhr.responseText || '';
+        const chunk = full.slice(seenIndex);
+        seenIndex = full.length;
+        parseLines(chunk);
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const full = xhr.responseText || '';
+          const chunk = full.slice(seenIndex);
+          seenIndex = full.length;
+          parseLines(chunk);
+
+          // Verifica se sobrou linha no lineBuffer
+          if (lineBuffer.trim().startsWith('data:')) {
+            try {
+              const data = JSON.parse(lineBuffer.trim().replace(/^data:\s*/, ''));
+              if (data.chat_id) responseChatId = data.chat_id;
+              if (data.type === 'chunk' && data.content) {
+                accumulatedText += data.content;
+                if (onChunk) onChunk(data.content);
+              } else if (data.type === 'message' && data.content) {
+                messageContent = data.content;
+              }
+            } catch {}
+          }
+
+          const finalContent = messageContent || accumulatedText || xhr.responseText;
+          resolve({
+            content: finalContent,
+            chatId: responseChatId,
+            ...responseMetadata
+          });
+        } else {
+          reject(new Error(`Erro no chat: HTTP ${xhr.status} - ${xhr.responseText}`));
+        }
+      };
+
+      xhr.onerror = () => {
+        reject(new Error('Falha de conexão com o servidor do chat'));
+      };
+
+      xhr.send(
+        JSON.stringify({
+          texto,
+          chat_id: chatId
+        })
+      );
     });
-
-    if (!res.ok) throw new Error(`Erro no chat: HTTP ${res.status}`);
-
-    const reader = res.body?.getReader();
-    if (!reader) {
-      const text = await res.text();
-      return text;
-    }
-
-    const decoder = new TextDecoder('utf-8');
-    let fullResponse = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      fullResponse += chunk;
-      if (onChunk) onChunk(chunk);
-    }
-
-    return fullResponse;
   }
 };

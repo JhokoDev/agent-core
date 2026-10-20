@@ -39,6 +39,32 @@ def validar_argumentos(
         valor = argumentos[nome]
         tipo = configuracao.get("tipo")
 
+        # Se o campo não for obrigatório e veio nulo, vazio ou "null", removemos com segurança
+        if not obrigatorio and (valor is None or valor == "" or valor == "null"):
+            del argumentos[nome]
+            continue
+
+        tipo_esperado = TIPOS_PERMITIDOS.get(tipo)
+
+        # Coerção inteligente para tipos comuns enviados como string por LLMs
+        if tipo in {"integer", "number"} and isinstance(valor, str):
+            try:
+                if tipo == "integer":
+                    argumentos[nome] = int(valor.strip())
+                else:
+                    argumentos[nome] = float(valor.strip())
+                valor = argumentos[nome]
+            except ValueError:
+                pass
+        elif tipo == "boolean" and isinstance(valor, str):
+            val_lower = valor.strip().lower()
+            if val_lower in ("true", "1", "sim", "yes"):
+                argumentos[nome] = True
+                valor = True
+            elif val_lower in ("false", "0", "nao", "não", "no"):
+                argumentos[nome] = False
+                valor = False
+
         if tipo not in TIPOS_PERMITIDOS:
             return False, (
                 f"O schema da ferramenta possui o tipo "
