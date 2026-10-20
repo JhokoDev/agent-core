@@ -14,6 +14,8 @@ build/
 node_modules/
 painel-core/node_modules/
 painel-web/node_modules/
+mobile/node_modules/
+mobile/.expo/
 painel-core/dist/
 painel-web/dist/
 

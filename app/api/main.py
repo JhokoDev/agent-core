@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
-from fastapi.responses import StreamingResponse
+import asyncio
 import shutil
 import uuid
 import os
 from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi.responses import StreamingResponse
 
 from app.api.schemas import ChatRequest
 from app.core.security import verificar_token
@@ -15,30 +16,37 @@ from app.events import event_bus, event_gateway
 from app.events.command_contract import ProcessMessageCommand
 import app.services 
 
-# --- NOVAS IMPORTAÇÕES DAS FASES 8.6 e 8.7 ---
+# --- IMPORTAÇÕES DE ADAPTERS E ROUTERS ---
 from app.adapters import mqtt_adapter
 from app.api.bridge_router import bridge_router
+from app.api.life_os_router import life_os_router
+from app.api.tasks_router import tasks_router
+from app.services.life_os import life_os_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gere o ciclo de vida da aplicação (arranque e encerramento)."""
-    # Arranque: Iniciar o adaptador MQTT em background
-    # await mqtt_adapter.iniciar()
-    print("Agent Core inicializado com suporte MQTT!")
+    # Arranque: Iniciar o Heartbeat proativo do Life OS em segundo plano
+    heartbeat_task = asyncio.create_task(life_os_service.iniciar_heartbeat(intervalo_segundos=60))
+    print("Agent Core inicializado com suporte MQTT e Life OS Heartbeat ativo!")
     yield
-    # Encerramento: Aqui limparíamos as ligações se necessário
+    # Encerramento: Finaliza o heartbeat e limpa tarefas
+    life_os_service.parar_heartbeat()
+    heartbeat_task.cancel()
     print("A encerrar Agent Core...")
 
 # Passar o lifespan para a instância do FastAPI
 app = FastAPI(lifespan=lifespan)
 
-# --- ADICIONAR O ROUTER DA BRIDGE ---
+# --- ADICIONAR ROUTERS ---
 app.include_router(bridge_router)
+app.include_router(life_os_router)
+app.include_router(tasks_router)
 
 
 # ==========================================
-# ROTAS DA API (Mantém-se idênticas ao ficheiro anterior)
+# ROTAS DA API
 # ==========================================
 
 @app.get("/agentes", dependencies=[Depends(verificar_token)])
