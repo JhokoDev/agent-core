@@ -45,10 +45,31 @@ export interface DashboardStatus {
   habitos: Habito[];
 }
 
+export type CategoriaCaixa = 'custos_fixos' | 'construcao_futuro' | 'autoaperfeicoamento' | 'livre_lazer';
+
+export interface CaixaItem {
+  despesas: number;
+  receitas: number;
+  saldo: number;
+}
+
+export interface SaldoCaixasResponse {
+  caixas: {
+    custos_fixos: CaixaItem;
+    construcao_futuro: CaixaItem;
+    autoaperfeicoamento: CaixaItem;
+    livre_lazer: CaixaItem;
+  };
+  teto_diario_livre: number;
+  gastos_hoje: number;
+  saldo_diario_restante: number;
+  multas_procrastinacao_total: number;
+}
+
 export interface TransacaoFinanceira {
   id: number;
   data_hora: string;
-  tipo: 'despesa' | 'receita';
+  tipo: 'despesa' | 'receita' | 'multa_procrastinacao';
   valor: number;
   categoria: string;
   descricao?: string;

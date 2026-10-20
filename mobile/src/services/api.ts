@@ -7,7 +7,9 @@ import {
   TransacaoFinanceira,
   Meta,
   Habito,
-  ChatMessage
+  ChatMessage,
+  SaldoCaixasResponse,
+  CategoriaCaixa
 } from '../types';
 
 export function getBundlerHost(): string {
@@ -166,7 +168,7 @@ export const agentApi = {
   },
 
   // 3. Finanças
-  async listarFinancas(limite: number = 30): Promise<TransacaoFinanceira[]> {
+  async listarFinancas(limite: number = 50): Promise<TransacaoFinanceira[]> {
     const base = getApiBaseUrl();
     const res = await fetch(`${base}/api/life/financas?limite=${limite}`, {
       headers: getHeaders()
@@ -175,20 +177,51 @@ export const agentApi = {
     return await res.json();
   },
 
-  async registrarGasto(valor: number, descricao: string, categoria: string = 'geral'): Promise<any> {
+  async obterSaldoCaixas(): Promise<SaldoCaixasResponse> {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/financas/caixas`, {
+      headers: getHeaders()
+    });
+    if (!res.ok) throw new Error(`Erro ao obter saldo das caixas: HTTP ${res.status}`);
+    return await res.json();
+  },
+
+  async registrarTransacao(
+    tipo: 'despesa' | 'receita',
+    valor: number,
+    descricao: string,
+    categoria: string = 'livre_lazer'
+  ): Promise<any> {
     const base = getApiBaseUrl();
     const res = await fetch(`${base}/api/life/financas/transacao`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
-        tipo: 'despesa',
+        tipo,
         valor,
         descricao,
         categoria,
         origem: 'mobile_app'
       })
     });
-    if (!res.ok) throw new Error(`Erro ao registrar gasto: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Erro ao registrar transação: HTTP ${res.status}`);
+    return await res.json();
+  },
+
+  async registrarGasto(valor: number, descricao: string, categoria: string = 'livre_lazer'): Promise<any> {
+    return this.registrarTransacao('despesa', valor, descricao, categoria);
+  },
+
+  async registrarReceita(valor: number, descricao: string, categoria: string = 'construcao_futuro'): Promise<any> {
+    return this.registrarTransacao('receita', valor, descricao, categoria);
+  },
+
+  async obterOrcamentoLazer(): Promise<any> {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/financas/orcamento-lazer`, {
+      headers: getHeaders()
+    });
+    if (!res.ok) throw new Error(`Erro ao obter orçamento de lazer: HTTP ${res.status}`);
     return await res.json();
   },
 

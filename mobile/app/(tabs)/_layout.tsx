@@ -74,13 +74,6 @@ export default function TabLayout() {
           )
         }}
       />
-      {/* Oculta two do menu caso o expo-router leia arquivos na pasta */}
-      <Tabs.Screen
-        name="two"
-        options={{
-          href: null
-        }}
-      />
     </Tabs>
   );
 }
