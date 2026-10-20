@@ -44,6 +44,57 @@ app.include_router(bridge_router)
 app.include_router(life_os_router)
 app.include_router(tasks_router)
 
+# ==========================================
+# ALIASES DIRETOS DO CHECKLIST LIFE OS
+# ==========================================
+
+from app.services.life_os.models import (
+    InboxInput, EmergencyPauseRequest, SensorContextRequest,
+    BancoNotificacaoWebhook, MultaRequest
+)
+
+@app.post("/api/inbox")
+async def alias_api_inbox(payload: InboxInput):
+    """Endpoint de Captura Rápida Zero-Fricção (alias checklist)."""
+    return await life_os_service.inbox.processar_entrada(
+        texto=payload.texto,
+        audio_base64=payload.audio_base64,
+        forcar_sem_trava=payload.forcar_sem_trava
+    )
+
+@app.post("/api/system/emergency-pause")
+def alias_emergency_pause(req: EmergencyPauseRequest):
+    """Pausa as cobranças por motivo de imprevisto/emergência (alias checklist)."""
+    try:
+        return life_os_service.ativar_modo_emergencia(motivo=req.motivo, duracao_horas=req.duracao_horas)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/sensors/context")
+async def alias_sensors_context(req: SensorContextRequest):
+    """Recebe telemetria do MacroDroid (Wi-Fi, carregador, em_casa) (alias checklist)."""
+    return await life_os_service.atualizar_contexto_sensores(req.model_dump())
+
+@app.post("/api/finances/bank-notification")
+async def alias_bank_notification(notif: BancoNotificacaoWebhook):
+    """Interceptação de notificações de Pix/banco (alias checklist)."""
+    return await life_os_service.processar_notificacao_bancaria(
+        app_origem=notif.app_origem,
+        texto=notif.texto,
+        titulo=notif.titulo or ""
+    )
+
+@app.get("/api/finances/boxes")
+def alias_finances_boxes():
+    """Consulta consolidada das 4 Caixas Financeiras (alias checklist)."""
+    return life_os_service.obter_saldo_caixas()
+
+@app.post("/api/finances/penalty")
+def alias_finances_penalty(req: MultaRequest):
+    """Contrato de Ulisses / Multa de Procrastinação (alias checklist)."""
+    return life_os_service.aplicar_multa(valor=req.valor, motivo=req.motivo, tarefa_id=req.tarefa_id)
+
+
 
 # ==========================================
 # ROTAS DA API

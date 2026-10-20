@@ -67,20 +67,43 @@ class LifeOSDatabase:
             )
             """)
 
-            # 2. Tabela de Transações Financeiras
-            cursor.execute("""
-            CREATE TABLE IF NOT EXISTS financas_transacoes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                data_hora TEXT NOT NULL,
-                tipo TEXT CHECK(tipo IN ('despesa', 'receita')) NOT NULL,
-                valor REAL NOT NULL,
-                categoria TEXT NOT NULL,
-                descricao TEXT,
-                horas_vida REAL DEFAULT 0.0,
-                origem TEXT DEFAULT 'manual_texto',
-                raw_payload TEXT
-            )
-            """)
+            # 2. Tabela de Transações Financeiras (com suporte a multas de procrastinação)
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='financas_transacoes'")
+            row_fin = cursor.fetchone()
+            if row_fin and "multa_procrastinacao" not in row_fin[0]:
+                cursor.execute("ALTER TABLE financas_transacoes RENAME TO financas_transacoes_old")
+                cursor.execute("""
+                CREATE TABLE financas_transacoes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data_hora TEXT NOT NULL,
+                    tipo TEXT CHECK(tipo IN ('despesa', 'receita', 'multa_procrastinacao')) NOT NULL,
+                    valor REAL NOT NULL,
+                    categoria TEXT NOT NULL,
+                    descricao TEXT,
+                    horas_vida REAL DEFAULT 0.0,
+                    origem TEXT DEFAULT 'manual_texto',
+                    raw_payload TEXT
+                )
+                """)
+                cursor.execute("""
+                INSERT INTO financas_transacoes (id, data_hora, tipo, valor, categoria, descricao, horas_vida, origem, raw_payload)
+                SELECT id, data_hora, tipo, valor, categoria, descricao, horas_vida, origem, raw_payload FROM financas_transacoes_old
+                """)
+                cursor.execute("DROP TABLE financas_transacoes_old")
+            else:
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS financas_transacoes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data_hora TEXT NOT NULL,
+                    tipo TEXT CHECK(tipo IN ('despesa', 'receita', 'multa_procrastinacao')) NOT NULL,
+                    valor REAL NOT NULL,
+                    categoria TEXT NOT NULL,
+                    descricao TEXT,
+                    horas_vida REAL DEFAULT 0.0,
+                    origem TEXT DEFAULT 'manual_texto',
+                    raw_payload TEXT
+                )
+                """)
 
             # 3. Tabela de Configurações Financeiras e Limites
             cursor.execute("""
@@ -127,6 +150,20 @@ class LifeOSDatabase:
                 detalhes TEXT
             )
             """)
+
+            # 7. Tabela de Agenda Fixa (Eventos / Reuniões)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                start_at TEXT NOT NULL,
+                end_at TEXT NOT NULL,
+                is_busy_block INTEGER DEFAULT 1,
+                external_calendar_id TEXT,
+                created_at TEXT NOT NULL
+            )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at)")
 
             # Inserir configurações padrão se não existirem
             config_padroes = {
@@ -444,3 +481,160 @@ class LifeOSDatabase:
                 (agora, tipo_evento, json.dumps(detalhes))
             )
             conn.commit()
+
+    # ==========================================
+    # AGENDA FIXA (EVENTOS E REUNIÕES)
+    # ==========================================
+
+    def criar_evento(self, title: str, start_at: str, end_at: str, is_busy_block: int = 1, external_calendar_id: Optional[str] = None) -> int:
+        agora = datetime.now().isoformat()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO events (title, start_at, end_at, is_busy_block, external_calendar_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (title, start_at, end_at, is_busy_block, external_calendar_id, agora))
+            conn.commit()
+            return cursor.lastrowid
+
+    def listar_eventos(self, data: Optional[str] = None) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if data:
+                cursor.execute("SELECT * FROM events WHERE start_at LIKE ? ORDER BY start_at ASC", (f"{data}%",))
+            else:
+                cursor.execute("SELECT * FROM events ORDER BY start_at ASC LIMIT 100")
+            return [dict(r) for r in cursor.fetchall()]
+
+    def verificar_usuario_em_reuniao(self, data_hora_iso: Optional[str] = None) -> bool:
+        agora = data_hora_iso or datetime.now().isoformat()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT COUNT(*) FROM events 
+            WHERE is_busy_block = 1 
+              AND start_at <= ? 
+              AND end_at >= ?
+            """, (agora, agora))
+            return cursor.fetchone()[0] > 0
+
+    # ==========================================
+    # VÍNCULO TAREFA ↔ META (GOAL_ID)
+    # ==========================================
+
+    def obter_tarefa_com_impacto_meta(self, tarefa_id: int) -> Optional[Dict[str, Any]]:
+        """Retorna tarefa e meta associada para alertar o impacto de atrasos."""
+        tarefa = self.obter_tarefa(tarefa_id)
+        if not tarefa:
+            return None
+        meta_id = tarefa.get("meta_id")
+        meta_info = None
+        if meta_id:
+            with self.get_connection() as conn:
+                row = conn.execute("SELECT * FROM metas WHERE id = ?", (meta_id,)).fetchone()
+                if row:
+                    meta_info = dict(row)
+        tarefa["meta_associada"] = meta_info
+        return tarefa
+
+    # ==========================================
+    # GESTÃO DAS 4 CAIXAS FINANCEIRAS & MULTAS
+    # ==========================================
+
+    def obter_saldo_caixas(self) -> Dict[str, Any]:
+        """Calcula totais consolidados para as 4 Caixas Financeiras."""
+        with self.get_connection() as conn:
+            # Gastos e receitas por categoria
+            rows = conn.execute("""
+                SELECT categoria, tipo, COALESCE(SUM(valor), 0.0) as total
+                FROM financas_transacoes
+                GROUP BY categoria, tipo
+            """).fetchall()
+
+            caixas = {
+                "custos_fixos": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0},
+                "construcao_futuro": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0},
+                "autoaperfeicoamento": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0},
+                "livre_lazer": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0}
+            }
+
+            multas_total = 0.0
+
+            for r in rows:
+                cat = r["categoria"]
+                tipo = r["tipo"]
+                tot = float(r["total"])
+                if tipo == "multa_procrastinacao":
+                    multas_total += tot
+                    caixas["construcao_futuro"]["receitas"] += tot
+                    caixas["livre_lazer"]["despesas"] += tot
+                    continue
+
+                if cat not in caixas:
+                    cat = "livre_lazer"
+                if tipo == "receita":
+                    caixas[cat]["receitas"] += tot
+                else:
+                    caixas[cat]["despesas"] += tot
+
+            for c in caixas:
+                caixas[c]["saldo"] = round(caixas[c]["receitas"] - caixas[c]["despesas"], 2)
+
+            teto_diario = float(self.obter_config("teto_diario_livre", "50.0"))
+            gastos_hoje = self.obter_gastos_hoje()
+
+            return {
+                "caixas": caixas,
+                "teto_diario_livre": teto_diario,
+                "gastos_hoje": gastos_hoje,
+                "saldo_diario_restante": round(teto_diario - gastos_hoje, 2),
+                "multas_procrastinacao_total": round(multas_total, 2)
+            }
+
+    def aplicar_multa_procrastinacao(self, valor: float, motivo: str, tarefa_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Nível 5: Contrato de Ulisses.
+        Transfere o valor da caixa 'livre_lazer' para 'construcao_futuro' como penalidade.
+        """
+        agora = datetime.now().isoformat()
+        valor_hora = float(self.obter_config("valor_hora_trabalho", "25.0"))
+        horas_vida = round(valor / valor_hora, 2) if valor_hora > 0 else 0.0
+
+        desc = f"Multa Procrastinação: {motivo}"
+        if tarefa_id:
+            desc += f" (Tarefa #{tarefa_id})"
+
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+            INSERT INTO financas_transacoes (
+                data_hora, tipo, valor, categoria, descricao, horas_vida, origem, raw_payload
+            ) VALUES (?, 'multa_procrastinacao', ?, 'construcao_futuro', ?, ?, 'contrato_ulisses', ?)
+            """, (agora, valor, desc, horas_vida, json.dumps({"tarefa_id": tarefa_id, "motivo": motivo})))
+            tid = cur.lastrowid
+
+            # Acumula na config
+            acumulado = float(self.obter_config("multa_procrastinacao_acumulada", "0.0")) + valor
+            conn.execute(
+                "INSERT INTO financas_config (chave, valor) VALUES ('multa_procrastinacao_acumulada', ?) "
+                "ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor",
+                (str(acumulado),)
+            )
+            conn.commit()
+
+        self.registrar_telemetria("multa_procrastinacao_aplicada", {
+            "tarefa_id": tarefa_id,
+            "valor": valor,
+            "motivo": motivo,
+            "transacao_id": tid
+        })
+
+        return {
+            "sucesso": True,
+            "transacao_id": tid,
+            "valor_multado": valor,
+            "origem": "livre_lazer",
+            "destino": "construcao_futuro",
+            "motivo": motivo,
+            "horas_vida_perdidas": horas_vida
+        }

@@ -1,3 +1,5 @@
+import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   DashboardStatus,
   Tarefa,
@@ -7,15 +9,41 @@ import {
   ChatMessage
 } from '../types';
 
-// Configuração Base do Agent Core
-// Em desenvolvimento via Tailscale ou emulador:
-// 'http://10.0.2.2:8000' (Emulador Android) ou 'http://127.0.0.1:8000' ou IP Tailscale
-let API_BASE_URL = 'http://127.0.0.1:8000';
+function detectDefaultHost(): string {
+  try {
+    const hostUri =
+      Constants.expoConfig?.hostUri ||
+      (Constants as any).manifest?.debuggerHost ||
+      (Constants as any).manifest2?.extra?.expoClient?.hostUri;
+
+    if (hostUri) {
+      const host = hostUri.split(':')[0];
+      if (host && host !== 'localhost' && host !== '127.0.0.1') {
+        return `http://${host}:8000`;
+      }
+    }
+  } catch {}
+  return 'http://10.113.90.51:8000';
+}
+
+let API_BASE_URL = detectDefaultHost();
 let API_TOKEN = 'minhasenha_super_segura_de_32_caracteres_minimo_aqui';
 
-export function setApiConfig(baseUrl: string, token?: string) {
+// Carrega preferências salvas no dispositivo
+AsyncStorage.getItem('@agent_core_server_url').then((savedUrl) => {
+  if (savedUrl) API_BASE_URL = savedUrl.replace(/\/$/, '');
+});
+AsyncStorage.getItem('@agent_core_token').then((savedToken) => {
+  if (savedToken) API_TOKEN = savedToken;
+});
+
+export async function setApiConfig(baseUrl: string, token?: string) {
   API_BASE_URL = baseUrl.replace(/\/$/, '');
-  if (token) API_TOKEN = token;
+  await AsyncStorage.setItem('@agent_core_server_url', API_BASE_URL);
+  if (token) {
+    API_TOKEN = token;
+    await AsyncStorage.setItem('@agent_core_token', token);
+  }
 }
 
 export function getApiBaseUrl(): string {

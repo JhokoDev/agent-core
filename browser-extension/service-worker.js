@@ -343,6 +343,11 @@ async function handleCommand(cmd) {
         result = await execTabControl(args.action, args.tab_id, args.url);
         break;
 
+      case "block_distractions":
+      case "focus_mode":
+        result = await execBlockDistractions(args?.redirect_url);
+        break;
+
       default:
         error = `Operação '${operation}' não reconhecida.`;
     }

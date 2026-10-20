@@ -126,7 +126,43 @@ class HabitoOut(HabitoCreate):
 # ==========================================
 
 class AcaoNtfyWebhook(BaseModel):
-    acao: Literal["estou_a_caminho", "adiar_15m", "concluir", "abrir_pc", "renegociar"]
+    acao: Literal["estou_a_caminho", "iniciar", "adiar_15m", "concluir", "abrir_pc", "renegociar"]
     tarefa_id: int
     motivo: Optional[str] = None
     minutos: Optional[int] = 15
+
+# ==========================================
+# MODELOS DE INBOX, SENSORES E RITUAIS
+# ==========================================
+
+class InboxInput(BaseModel):
+    texto: Optional[str] = None
+    audio_base64: Optional[str] = None
+    forcar_sem_trava: bool = False
+
+class EmergencyPauseRequest(BaseModel):
+    motivo: str = Field(..., min_length=4, description="Justificativa obrigatória do imprevisto")
+    duracao_horas: int = Field(default=4, ge=1, le=72)
+
+class SensorContextRequest(BaseModel):
+    wifi: Optional[str] = None
+    em_casa: Optional[bool] = None
+    carregador: Optional[bool] = None
+    bateria: Optional[int] = None
+    tela_ligada: Optional[bool] = None
+
+class EventoCreate(BaseModel):
+    title: str = Field(..., min_length=2, max_length=255)
+    start_at: str = Field(..., description="Data/hora ISO: YYYY-MM-DDTHH:MM:SS")
+    end_at: str = Field(..., description="Data/hora ISO: YYYY-MM-DDTHH:MM:SS")
+    is_busy_block: int = 1
+    external_calendar_id: Optional[str] = None
+
+class MultaRequest(BaseModel):
+    valor: float = Field(default=10.0, gt=0)
+    motivo: str = Field(..., min_length=3)
+    tarefa_id: Optional[int] = None
+
+class FechamentoNoturnoRequest(BaseModel):
+    audio_transcript: str = Field(default="", description="Transcrição do áudio de 30s de vitória do dia")
+    energy_score: int = Field(default=5, ge=1, le=10)

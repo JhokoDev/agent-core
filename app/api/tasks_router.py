@@ -81,23 +81,60 @@ async def criar_tarefa(dados: CriarTarefaSchema):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@tasks_router.post("/{tarefa_id}/postpone", dependencies=[Depends(verificar_token)])
+@tasks_router.post("/{tarefa_id}/start")
+async def iniciar_tarefa_endpoint(tarefa_id: int):
+    """Marca tarefa em andamento, prepara ambiente se for de PC e pausa escalonamento."""
+    from app.services.life_os import life_os_service
+    res = life_os_service.iniciar_tarefa(tarefa_id)
+    if not res:
+        # Fallback para o task_service se não existir no life_os
+        t = task_service.obter_tarefa(tarefa_id)
+        if not t:
+            raise HTTPException(status_code=404, detail="Tarefa não encontrada.")
+        return {"status": "em_andamento", "id": tarefa_id}
+    return res
+
+
+@tasks_router.post("/{tarefa_id}/postpone")
 async def adiar_tarefa(tarefa_id: int, dados: AdiarTarefaSchema):
+    """Fricção assimétrica: rejeita requisição vazia em tarefas críticas com HTTP 400."""
+    from app.services.life_os import life_os_service
+    t_life = life_os_service.obter_tarefa(tarefa_id)
+    if t_life and t_life.get("criticidade") == "critica":
+        if not dados.motivo or len(dados.motivo.strip()) < 2:
+            raise HTTPException(status_code=400, detail="Justificativa substantiva é obrigatória para adiar tarefas críticas.")
+        return life_os_service.adiar_tarefa(tarefa_id, motivo=dados.motivo, minutos=dados.novos_minutos or 15)
+
     try:
+        res = life_os_service.adiar_tarefa(tarefa_id, motivo=dados.motivo, minutos=dados.novos_minutos or 15)
+        if res:
+            return res
         return task_service.adiar_tarefa(
             tarefa_id=tarefa_id,
             motivo=dados.motivo,
             novos_minutos=dados.novos_minutos or 15
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@tasks_router.post("/{tarefa_id}/complete", dependencies=[Depends(verificar_token)])
+@tasks_router.post("/{tarefa_id}/done")
+@tasks_router.post("/{tarefa_id}/complete")
 async def concluir_tarefa(tarefa_id: int, dados: ConcluirTarefaSchema):
+    """Conclusão com validação de Proof of Work para tarefas críticas."""
+    from app.services.life_os import life_os_service
+    t_life = life_os_service.obter_tarefa(tarefa_id)
+    if t_life and t_life.get("criticidade") == "critica":
+        if not dados.proof_data or len(dados.proof_data.strip()) < 2:
+            raise HTTPException(status_code=400, detail="Comprovação (Proof of Work) é obrigatória para concluir tarefas críticas.")
+        return life_os_service.concluir_tarefa(tarefa_id, prova=dados.proof_data)
+
     try:
+        res = life_os_service.concluir_tarefa(tarefa_id, prova=dados.proof_data or "")
+        if res:
+            return res
         return task_service.concluir_tarefa(
             tarefa_id=tarefa_id,
             proof_data=dados.proof_data or ""

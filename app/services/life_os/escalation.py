@@ -1,4 +1,5 @@
 import time
+import requests
 import logging
 from datetime import datetime, date, timedelta
 from typing import Dict, Any, List, Optional
@@ -48,17 +49,83 @@ class LifeOSEscalationEngine:
             logger.debug(f"[Escalation] Verificação de janelas indisponível: {e}")
         return None
 
+
+    def gerar_cobranca_llm(self, tarefa: Dict[str, Any], minutos_diff: int, nivel: int) -> str:
+        """Gera cobrança dinâmica e assertiva via LLM confrontando desculpas anteriores e meta vinculada."""
+        titulo = tarefa.get("titulo", "Tarefa")
+        postpone_count = tarefa.get("postpone_count", 0)
+        reasons = tarefa.get("postpone_reasons", [])
+        ultimas_desculpas = [r.get("motivo", "") for r in reasons[-2:] if r.get("motivo")]
+        desculpas_str = ", ".join(f"'{d}'" for d in ultimas_desculpas) if ultimas_desculpas else "nenhuma registrada"
+
+        meta_info = ""
+        meta_id = tarefa.get("meta_id")
+        if meta_id:
+            try:
+                tarefa_meta = self.db.obter_tarefa_com_impacto_meta(tarefa["id"])
+                if tarefa_meta and tarefa_meta.get("meta_associada"):
+                    meta_nome = tarefa_meta["meta_associada"].get("titulo")
+                    meta_pilar = tarefa_meta["meta_associada"].get("pilar")
+                    meta_info = f" Esta tarefa alimenta diretamente sua meta de longo prazo '{meta_nome}' ({meta_pilar})."
+            except Exception:
+                pass
+
+        prompt = (
+            f"Você é o assistente insistente Life OS. A tarefa '{titulo}' está atrasada há {minutos_diff} minutos. "
+            f"Nível de cobrança: {nivel}/5. Adiamentos anteriores: {postpone_count}x. "
+            f"Desculpas anteriores: {desculpas_str}.{meta_info} "
+            f"Gere uma cobrança curta (máximo 2 frases), assertiva e motivadora confrontando a procrastinação. "
+            f"Não invente justificativas, seja direto."
+        )
+
+        try:
+            resp = requests.post(
+                "http://localhost:11434/api/chat",
+                json={
+                    "model": "llama3.2:latest",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "options": {"temperature": 0.4}
+                },
+                timeout=2.5
+            )
+            if resp.status_code == 200:
+                txt = resp.json().get("message", {}).get("content", "").strip()
+                if txt and len(txt) > 10:
+                    return txt
+        except Exception:
+            pass
+
+        # Fallback dinâmico determinístico
+        base = f"A tarefa '{titulo}' está atrasada há {minutos_diff} minutos."
+        if postpone_count > 0:
+            base += f" Você já adiou {postpone_count}x ({desculpas_str})."
+        if meta_info:
+            base += f"{meta_info}"
+        return base
+
     async def processar_heartbeat(self, host_base: str = "http://127.0.0.1:8000") -> List[Dict[str, Any]]:
         """
         Executado a cada 1 minuto pelo loop em background.
         Avalia tarefas pendentes e escala a cobrança conforme necessário.
         """
         hoje = date.today().isoformat()
+        acoes_disparadas = []
+
+        # 1. Verifica se Modo Emergência / Imprevisto está ativo
+        if self.db.obter_config("modo_emergencia_ativo") == "1":
+            logger.info("[Escalation] Modo Emergência / Imprevisto ativo. Cobranças suspensas.")
+            return acoes_disparadas
+
+        # 2. Verifica se usuário está em compromisso fixo / reunião na agenda
+        if self.db.verificar_usuario_em_reuniao():
+            logger.info("[Escalation] Usuário em compromisso fixo da agenda. Cobranças suspensas.")
+            return acoes_disparadas
+
         tarefas = self.db.listar_tarefas(status="pendente", data_prevista=hoje)
         tarefas_em_andamento = self.db.listar_tarefas(status="em_andamento", data_prevista=hoje)
         tarefas_ativas = tarefas + tarefas_em_andamento
 
-        acoes_disparadas = []
         agora_ts = time.time()
 
         for tarefa in tarefas_ativas:
@@ -152,17 +219,55 @@ class LifeOSEscalationEngine:
                 acoes_disparadas.append({"tarefa_id": tarefa_id, "nivel": 3, "tipo": "alarme_insistente"})
 
             # ==========================================
+            # NÍVEL 5: Contrato de Ulisses / Imposto sobre Procrastinação (45+ min em crítica Nível 4)
+            # ==========================================
+            elif minutos_diff >= 45 and criticidade == "critica" and escalation >= 4 and tempo_desde_ultimo_aviso >= intervalo_minimo_segundos:
+                multa_valor = float(self.db.obter_config("valor_multa_procrastinacao", "10.0"))
+                res_multa = self.db.aplicar_multa_procrastinacao(
+                    valor=multa_valor,
+                    motivo=f"Tarefa crítica '{tarefa['titulo']}' abandonada",
+                    tarefa_id=tarefa_id
+                )
+                msg = (
+                    f"💸 CONTRATO DE ULISSES EXECUTADO!\n"
+                    f"Você abandonou a tarefa crítica '{tarefa['titulo']}'. "
+                    f"Multa de R$ {multa_valor:.2f} foi transferida da sua caixa Lazer para Construção de Futuro/Reserva!"
+                )
+                await self.notifier.enviar(
+                    mensagem=msg,
+                    titulo=f"💸 MULTA APLICADA: {tarefa['titulo']}",
+                    prioridade=5,
+                    tags=["money_with_wings", "bangbang"]
+                )
+                self.db.atualizar_tarefa(tarefa_id, {
+                    "escalation_level": 5,
+                    "ultimo_aviso_ts": agora_ts
+                })
+                acoes_disparadas.append({"tarefa_id": tarefa_id, "nivel": 5, "tipo": "contrato_ulisses", "multa": res_multa})
+
+            # ==========================================
             # NÍVEL 4: Intervenção Ativa no PC (30+ min de atraso em crítica)
             # ==========================================
-            elif minutos_diff >= 30 and criticidade == "critica" and tempo_desde_ultimo_aviso >= intervalo_minimo_segundos:
+            elif minutos_diff >= 30 and criticidade == "critica" and (escalation < 4 or tempo_desde_ultimo_aviso >= intervalo_minimo_segundos):
                 janela_distracao = await self.verificar_janelas_distracao()
                 extra_bronca = ""
                 if janela_distracao:
                     extra_bronca = f"\n🎮 Detectei que você está com '{janela_distracao}' aberta no PC em vez de estar focando!"
 
+                # Sequestro de foco no Chrome via WebSocket MCP
+                try:
+                    from app.services.playwright_mcp_service import playwright_service
+                    playwright_service.dispatch_command("block_distractions", {
+                        "redirect_url": "https://painel.makeraddon.online/#conversation"
+                    })
+                    logger.info("[Escalation] Bloqueio de distração enviado para o Chrome Extension via WebSocket!")
+                except Exception as err_pw:
+                    logger.debug(f"[Escalation] Extensão Chrome não conectada no momento: {err_pw}")
+
+                llm_cobranca = self.gerar_cobranca_llm(tarefa, minutos_diff, 4)
                 msg = (
-                    f"🛑 INTERVENÇÃO TOTAL: '{tarefa['titulo']}' está atrasada há mais de {minutos_diff} minutos.{extra_bronca}\n"
-                    f"O agente está acionando o bloqueio de foco."
+                    f"🛑 INTERVENÇÃO TOTAL: {llm_cobranca}{extra_bronca}\n"
+                    f"O agente ativou o bloqueio de abas e modo foco."
                 )
                 botoes = self.notifier.gerar_botoes_tarefa(tarefa_id, host_base)
                 await self.notifier.enviar(

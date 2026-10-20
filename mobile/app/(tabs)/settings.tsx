@@ -18,19 +18,19 @@ export default function SettingsScreen() {
   const [motivoImprevisto, setMotivoImprevisto] = useState('');
   const [testing, setTesting] = useState(false);
 
-  const handleSalvarConexao = () => {
+  const handleSalvarConexao = async () => {
     if (!serverUrl.trim()) {
       Alert.alert('Aviso', 'Informe a URL do servidor.');
       return;
     }
-    setApiConfig(serverUrl.trim(), token.trim());
-    Alert.alert('Configuração Salva', 'A URL do servidor Agent Core foi atualizada.');
+    await setApiConfig(serverUrl.trim(), token.trim());
+    Alert.alert('Configuração Salva', 'A URL do servidor Agent Core foi atualizada e salva.');
   };
 
   const handleTestarConexao = async () => {
     setTesting(true);
     try {
-      setApiConfig(serverUrl.trim(), token.trim());
+      await setApiConfig(serverUrl.trim(), token.trim());
       const res = await agentApi.getDashboardStatus();
       Alert.alert(
         'Conexão Bem-Sucedida!',
