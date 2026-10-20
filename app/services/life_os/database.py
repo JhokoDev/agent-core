@@ -101,9 +101,16 @@ class LifeOSDatabase:
                     descricao TEXT,
                     horas_vida REAL DEFAULT 0.0,
                     origem TEXT DEFAULT 'manual_texto',
-                    raw_payload TEXT
+                    raw_payload TEXT,
+                    ma TEXT DEFAULT ''
                 )
                 """)
+
+            # Garante que a coluna 'ma' existe na tabela financas_transacoes (migração segura)
+            cursor.execute("PRAGMA table_info(financas_transacoes)")
+            colunas_fin = [col[1] for col in cursor.fetchall()]
+            if "ma" not in colunas_fin:
+                cursor.execute("ALTER TABLE financas_transacoes ADD COLUMN ma TEXT DEFAULT ''")
 
             # 3. Tabela de Configurações Financeiras e Limites
             cursor.execute("""
@@ -333,7 +340,8 @@ class LifeOSDatabase:
         categoria: str,
         descricao: str,
         origem: str = "manual_texto",
-        raw_payload: Optional[str] = None
+        raw_payload: Optional[str] = None,
+        ma: Optional[str] = ""
     ) -> int:
         agora = datetime.now().isoformat()
         valor_hora = float(self.obter_config("valor_hora_trabalho", "25.0"))
@@ -343,9 +351,9 @@ class LifeOSDatabase:
             cur = conn.cursor()
             cur.execute("""
             INSERT INTO financas_transacoes (
-                data_hora, tipo, valor, categoria, descricao, horas_vida, origem, raw_payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (agora, tipo, valor, categoria, descricao, horas_vida, origem, raw_payload))
+                data_hora, tipo, valor, categoria, descricao, horas_vida, origem, raw_payload, ma
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (agora, tipo, valor, categoria, descricao, horas_vida, origem, raw_payload, ma or ""))
             conn.commit()
             return cur.lastrowid
 

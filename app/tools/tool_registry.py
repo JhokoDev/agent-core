@@ -800,6 +800,11 @@ def criar_registry_padrao() -> ToolRegistry:
                     "tipo": "string",
                     "obrigatorio": False,
                     "descricao": "Nome do produto pretendido caso vá avaliar um pedágio de compra."
+                },
+                "ma": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Identificador, código, categoria ou marcador customizado 'ma'."
                 }
             },
             requer_confirmacao=False,

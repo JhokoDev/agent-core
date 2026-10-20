@@ -1027,20 +1027,27 @@ class FerramentaConsultorFinanceiroLifeOS(FerramentaBase):
         descricao = str(argumentos.get("descricao", "")).strip()
         categoria = str(argumentos.get("categoria", "livre_lazer")).lower().strip()
         item = str(argumentos.get("item", "")).strip()
+        ma = str(argumentos.get("ma", "")).strip()
 
         try:
             if acao in ("registrar_gasto", "gasto", "despesa"):
                 if valor <= 0:
                     return "Erro: Informe um valor numérico positivo para registrar o gasto."
-                res = life_os_service.finance.processar_notificacao_bancaria(
-                    app_origem="chat_assistente",
-                    texto=f"{descricao or 'Gasto'} - R$ {valor:.2f}",
-                    titulo=descricao or "Gasto Chat"
+                tid = life_os_service.db.registrar_transacao(
+                    tipo="despesa",
+                    valor=valor,
+                    categoria=categoria if categoria in ("custos_fixos", "construcao_futuro", "autoaperfeicoamento", "livre_lazer") else "livre_lazer",
+                    descricao=descricao or "Gasto Chat",
+                    origem="chat_assistente",
+                    ma=ma
                 )
+                valor_hora = float(life_os_service.db.obter_config("valor_hora_trabalho", "25.0"))
+                horas_vida = round(valor / valor_hora, 1) if valor_hora > 0 else 0.0
                 caixas = life_os_service.obter_saldo_caixas()
+                ma_info = f" (ma: '{ma}')" if ma else ""
                 return (
-                    f"Sucesso: Gasto de R$ {valor:.2f} ('{descricao or 'Despesa'}') registrado! "
-                    f"Horas de vida/esforço equivalentes: {res.get('horas_vida', 0)}h. "
+                    f"Sucesso: Gasto de R$ {valor:.2f} ('{descricao or 'Despesa'}'){ma_info} registrado! "
+                    f"Horas de vida/esforço equivalentes: {horas_vida}h. "
                     f"Saldo livre restante hoje: R$ {caixas.get('saldo_diario_restante', 0):.2f}. "
                     f"{'⚠️ ATENÇÃO: Teto diário estourado!' if caixas.get('saldo_diario_restante', 0) < 0 else 'Limite diário sob controle.'}"
                 )
@@ -1053,12 +1060,14 @@ class FerramentaConsultorFinanceiroLifeOS(FerramentaBase):
                     valor=valor,
                     categoria=categoria if categoria in ("custos_fixos", "construcao_futuro", "autoaperfeicoamento", "livre_lazer") else "construcao_futuro",
                     descricao=descricao or "Entrada / Receita",
-                    origem="chat_assistente"
+                    origem="chat_assistente",
+                    ma=ma
                 )
                 caixas = life_os_service.obter_saldo_caixas()
                 reserva = caixas.get("caixas", {}).get("construcao_futuro", {}).get("saldo", 0.0)
+                ma_info = f" (ma: '{ma}')" if ma else ""
                 return (
-                    f"Sucesso: Entrada de R$ {valor:.2f} ('{descricao or 'Receita'}') registrada na caixa '{categoria}'! "
+                    f"Sucesso: Entrada de R$ {valor:.2f} ('{descricao or 'Receita'}'){ma_info} registrada na caixa '{categoria}'! "
                     f"Sua caixa Reserva & Metas agora possui R$ {reserva:.2f}."
                 )
 

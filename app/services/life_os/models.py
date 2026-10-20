@@ -80,6 +80,7 @@ class FinancaTransacaoCreate(BaseModel):
     descricao: str = Field(default="", max_length=255)
     origem: str = Field(default="manual_texto")
     raw_payload: Optional[str] = None
+    ma: Optional[str] = Field(default="", description="Campo customizado MA")
 
 class FinancaTransacaoOut(FinancaTransacaoCreate):
     id: int

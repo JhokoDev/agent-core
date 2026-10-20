@@ -75,6 +75,7 @@ export interface TransacaoFinanceira {
   descricao?: string;
   horas_vida: number;
   origem: string;
+  ma?: string;
 }
 
 export interface Meta {

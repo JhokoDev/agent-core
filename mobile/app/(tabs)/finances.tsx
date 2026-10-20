@@ -32,6 +32,7 @@ export default function FinancesScreen() {
   const [valorTransacao, setValorTransacao] = useState('');
   const [descricaoTransacao, setDescricaoTransacao] = useState('');
   const [categoriaTransacao, setCategoriaTransacao] = useState<CategoriaCaixa>('livre_lazer');
+  const [campoMa, setCampoMa] = useState('');
 
   // Modal de Pedágio
   const [pedagioModal, setPedagioModal] = useState(false);
@@ -72,6 +73,7 @@ export default function FinancesScreen() {
     setCategoriaTransacao(tipo === 'receita' ? 'construcao_futuro' : 'livre_lazer');
     setValorTransacao('');
     setDescricaoTransacao('');
+    setCampoMa('');
     setTransacaoModalVisible(true);
   };
 
@@ -88,11 +90,13 @@ export default function FinancesScreen() {
         tipoTransacao,
         val,
         descricaoTransacao.trim(),
-        categoriaTransacao
+        categoriaTransacao,
+        campoMa.trim()
       );
       setTransacaoModalVisible(false);
       setValorTransacao('');
       setDescricaoTransacao('');
+      setCampoMa('');
       carregarDados();
       Alert.alert(
         'Sucesso!',
@@ -319,7 +323,14 @@ export default function FinancesScreen() {
                 </Text>
               </View>
               <View style={{ flex: 1, marginLeft: 10 }}>
-                <Text style={styles.transTitle}>{t.descricao || t.categoria}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                  <Text style={styles.transTitle}>{t.descricao || t.categoria}</Text>
+                  {!!t.ma && (
+                    <View style={styles.maBadge}>
+                      <Text style={styles.maBadgeText}>ma: {t.ma}</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={styles.transSub}>
                   {t.data_hora.substring(0, 10)} · {t.origem.replace('_', ' ')}
                   {!isReceita && t.horas_vida ? ` · Custa ${t.horas_vida.toFixed(1)}h de foco` : ''}
@@ -389,6 +400,15 @@ export default function FinancesScreen() {
               placeholderTextColor="#64748b"
               value={descricaoTransacao}
               onChangeText={setDescricaoTransacao}
+            />
+
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Campo 'ma' (opcional)"
+              placeholderTextColor="#64748b"
+              value={campoMa}
+              onChangeText={setCampoMa}
+              autoCapitalize="none"
             />
 
             {/* Seletor de Caixa de Destino */}
@@ -685,5 +705,17 @@ const styles = StyleSheet.create({
     borderColor: '#4f46e5'
   },
   pedagioConselho: { color: '#f8fafc', fontSize: 13, lineHeight: 18 },
-  pedagioHours: { color: '#a5b4fc', fontSize: 12, fontWeight: '700', marginTop: 8 }
+  pedagioHours: { color: '#a5b4fc', fontSize: 12, fontWeight: '700', marginTop: 8 },
+
+  maBadge: {
+    backgroundColor: '#3b82f6',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4
+  },
+  maBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800'
+  }
 });

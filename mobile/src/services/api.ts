@@ -206,7 +206,8 @@ export const agentApi = {
     tipo: 'despesa' | 'receita',
     valor: number,
     descricao: string,
-    categoria: string = 'livre_lazer'
+    categoria: string = 'livre_lazer',
+    ma: string = ''
   ): Promise<any> {
     const base = getApiBaseUrl();
     const res = await fetch(`${base}/api/life/financas/transacao`, {
@@ -217,19 +218,20 @@ export const agentApi = {
         valor,
         descricao,
         categoria,
-        origem: 'mobile_app'
+        origem: 'mobile_app',
+        ma
       })
     });
     if (!res.ok) throw new Error(`Erro ao registrar transação: HTTP ${res.status}`);
     return await res.json();
   },
 
-  async registrarGasto(valor: number, descricao: string, categoria: string = 'livre_lazer'): Promise<any> {
-    return this.registrarTransacao('despesa', valor, descricao, categoria);
+  async registrarGasto(valor: number, descricao: string, categoria: string = 'livre_lazer', ma: string = ''): Promise<any> {
+    return this.registrarTransacao('despesa', valor, descricao, categoria, ma);
   },
 
-  async registrarReceita(valor: number, descricao: string, categoria: string = 'construcao_futuro'): Promise<any> {
-    return this.registrarTransacao('receita', valor, descricao, categoria);
+  async registrarReceita(valor: number, descricao: string, categoria: string = 'construcao_futuro', ma: string = ''): Promise<any> {
+    return this.registrarTransacao('receita', valor, descricao, categoria, ma);
   },
 
   async obterOrcamentoLazer(): Promise<any> {

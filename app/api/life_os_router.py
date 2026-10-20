@@ -164,7 +164,8 @@ def registrar_transacao_manual(transacao: FinancaTransacaoCreate):
         categoria=transacao.categoria,
         descricao=transacao.descricao,
         origem=transacao.origem,
-        raw_payload=transacao.raw_payload
+        raw_payload=transacao.raw_payload,
+        ma=transacao.ma or ""
     )
     return {"sucesso": True, "transacao_id": tid}
 
