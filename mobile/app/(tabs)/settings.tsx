@@ -9,14 +9,28 @@ import {
   Switch,
   Alert
 } from 'react-native';
-import { setApiConfig, getApiBaseUrl, agentApi } from '../../src/services/api';
+import { setApiConfig, getApiBaseUrl, getBundlerHost, agentApi } from '../../src/services/api';
 
 export default function SettingsScreen() {
-  const [serverUrl, setServerUrl] = useState(getApiBaseUrl());
+  const detectedHost = getBundlerHost();
+  const [serverUrl, setServerUrl] = useState(() => {
+    const current = getApiBaseUrl();
+    if (!current || current.includes('127.0.0.1') || current.includes('localhost')) {
+      return `http://${detectedHost}:8000`;
+    }
+    return current;
+  });
   const [token, setToken] = useState('minhasenha_super_segura_de_32_caracteres_minimo_aqui');
   const [modoImprevisto, setModoImprevisto] = useState(false);
   const [motivoImprevisto, setMotivoImprevisto] = useState('');
   const [testing, setTesting] = useState(false);
+
+  const handleUsarIpDetectado = () => {
+    const defaultUrl = `http://${detectedHost}:8000`;
+    setServerUrl(defaultUrl);
+    setApiConfig(defaultUrl, token.trim());
+    Alert.alert('IP Aplicado', `URL redefinida para ${defaultUrl}`);
+  };
 
   const handleSalvarConexao = async () => {
     if (!serverUrl.trim()) {
@@ -93,6 +107,15 @@ export default function SettingsScreen() {
           autoCapitalize="none"
           autoCorrect={false}
         />
+
+        <TouchableOpacity
+          style={{ marginBottom: 14, padding: 8, backgroundColor: '#1e293b', borderRadius: 8, alignItems: 'center' }}
+          onPress={handleUsarIpDetectado}
+        >
+          <Text style={{ color: '#818cf8', fontSize: 13, fontWeight: '600' }}>
+            Usar IP Detectado ({detectedHost}:8000)
+          </Text>
+        </TouchableOpacity>
 
         <View style={styles.btnRow}>
           <TouchableOpacity

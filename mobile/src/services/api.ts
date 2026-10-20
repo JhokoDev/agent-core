@@ -1,3 +1,4 @@
+import { NativeModules, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -9,8 +10,20 @@ import {
   ChatMessage
 } from '../types';
 
-function detectDefaultHost(): string {
+export function getBundlerHost(): string {
   try {
+    // 1. Obtém o IP do host diretamente de onde o app baixou o bundle JavaScript do Metro
+    const scriptURL: string | undefined = NativeModules.SourceCode?.scriptURL;
+    if (scriptURL) {
+      const match = scriptURL.match(/^https?:\/\/([^:/]+)/);
+      if (match && match[1] && match[1] !== 'localhost' && match[1] !== '127.0.0.1') {
+        return match[1];
+      }
+    }
+  } catch {}
+
+  try {
+    // 2. Extrai do hostUri informado pelo Expo Go
     const hostUri =
       Constants.expoConfig?.hostUri ||
       (Constants as any).manifest?.debuggerHost ||
@@ -19,26 +32,47 @@ function detectDefaultHost(): string {
     if (hostUri) {
       const host = hostUri.split(':')[0];
       if (host && host !== 'localhost' && host !== '127.0.0.1') {
-        return `http://${host}:8000`;
+        return host;
       }
     }
   } catch {}
-  return 'http://10.113.90.51:8000';
+
+  // 3. Fallback para o IP da interface de rede do seu PC
+  return '10.113.90.51';
 }
 
-let API_BASE_URL = detectDefaultHost();
+function computeDefaultBaseUrl(): string {
+  const host = getBundlerHost();
+  return `http://${host}:8000`;
+}
+
+let API_BASE_URL = computeDefaultBaseUrl();
 let API_TOKEN = 'minhasenha_super_segura_de_32_caracteres_minimo_aqui';
 
-// Carrega preferências salvas no dispositivo
+// Carrega preferências salvas no dispositivo e limpa entradas antigas com 127.0.0.1
 AsyncStorage.getItem('@agent_core_server_url').then((savedUrl) => {
-  if (savedUrl) API_BASE_URL = savedUrl.replace(/\/$/, '');
+  if (savedUrl) {
+    const clean = savedUrl.trim().replace(/\/$/, '');
+    if (clean.includes('127.0.0.1') || clean.includes('localhost')) {
+      // Descarta localhost inválido no Android físico
+      AsyncStorage.removeItem('@agent_core_server_url');
+      API_BASE_URL = computeDefaultBaseUrl();
+    } else {
+      API_BASE_URL = clean;
+    }
+  }
 });
+
 AsyncStorage.getItem('@agent_core_token').then((savedToken) => {
   if (savedToken) API_TOKEN = savedToken;
 });
 
 export async function setApiConfig(baseUrl: string, token?: string) {
-  API_BASE_URL = baseUrl.replace(/\/$/, '');
+  let clean = baseUrl.trim().replace(/\/$/, '');
+  if (clean.includes('127.0.0.1') || clean.includes('localhost')) {
+    clean = computeDefaultBaseUrl();
+  }
+  API_BASE_URL = clean;
   await AsyncStorage.setItem('@agent_core_server_url', API_BASE_URL);
   if (token) {
     API_TOKEN = token;
@@ -47,6 +81,9 @@ export async function setApiConfig(baseUrl: string, token?: string) {
 }
 
 export function getApiBaseUrl(): string {
+  if (!API_BASE_URL || API_BASE_URL.includes('127.0.0.1') || API_BASE_URL.includes('localhost')) {
+    API_BASE_URL = computeDefaultBaseUrl();
+  }
   return API_BASE_URL;
 }
 
@@ -60,7 +97,8 @@ function getHeaders(contentType: string = 'application/json'): HeadersInit {
 export const agentApi = {
   // 1. Dashboard e Status
   async getDashboardStatus(): Promise<DashboardStatus> {
-    const res = await fetch(`${API_BASE_URL}/api/life/status`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/status`, {
       headers: getHeaders()
     });
     if (!res.ok) throw new Error(`Erro ao obter dashboard: HTTP ${res.status}`);
@@ -69,7 +107,8 @@ export const agentApi = {
 
   // 2. Tarefas
   async listarTarefas(params?: { status?: string; criticidade?: string; data?: string }): Promise<Tarefa[]> {
-    const url = new URL(`${API_BASE_URL}/api/life/tarefas`);
+    const base = getApiBaseUrl();
+    const url = new URL(`${base}/api/life/tarefas`);
     if (params?.status) url.searchParams.set('status', params.status);
     if (params?.criticidade) url.searchParams.set('criticidade', params.criticidade);
     if (params?.data) url.searchParams.set('data', params.data);
@@ -80,7 +119,8 @@ export const agentApi = {
   },
 
   async criarTarefa(tarefa: Partial<Tarefa>): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/life/tarefas`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/tarefas`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(tarefa)
@@ -90,7 +130,8 @@ export const agentApi = {
   },
 
   async adiarTarefa(tarefaId: number, motivo: string, minutos: number = 15): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/life/tarefas/${tarefaId}/adiar`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/tarefas/${tarefaId}/adiar`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ motivo, minutos_adiamento: minutos })
@@ -100,7 +141,8 @@ export const agentApi = {
   },
 
   async concluirTarefa(tarefaId: number, evidencia: string = ''): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/life/tarefas/${tarefaId}/concluir`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/tarefas/${tarefaId}/concluir`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ evidencia })
@@ -110,7 +152,8 @@ export const agentApi = {
   },
 
   async prepararPC(tarefaId?: number): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/life/acoes-ntfy`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/acoes-ntfy`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
@@ -124,7 +167,8 @@ export const agentApi = {
 
   // 3. Finanças
   async listarFinancas(limite: number = 30): Promise<TransacaoFinanceira[]> {
-    const res = await fetch(`${API_BASE_URL}/api/life/financas?limite=${limite}`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/financas?limite=${limite}`, {
       headers: getHeaders()
     });
     if (!res.ok) throw new Error(`Erro ao obter finanças: HTTP ${res.status}`);
@@ -132,7 +176,8 @@ export const agentApi = {
   },
 
   async registrarGasto(valor: number, descricao: string, categoria: string = 'geral'): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/life/financas/transacao`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/financas/transacao`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
@@ -148,7 +193,8 @@ export const agentApi = {
   },
 
   async calcularPedagio(valor: number, item: string): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/life/financas/pedagio?valor=${valor}&item=${encodeURIComponent(item)}`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/financas/pedagio?valor=${valor}&item=${encodeURIComponent(item)}`, {
       method: 'POST',
       headers: getHeaders()
     });
@@ -158,7 +204,8 @@ export const agentApi = {
 
   // 4. Metas & Hábitos
   async listarMetas(): Promise<Meta[]> {
-    const res = await fetch(`${API_BASE_URL}/api/life/metas`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/metas`, {
       headers: getHeaders()
     });
     if (!res.ok) throw new Error(`Erro ao listar metas: HTTP ${res.status}`);
@@ -166,7 +213,8 @@ export const agentApi = {
   },
 
   async listarHabitos(): Promise<Habito[]> {
-    const res = await fetch(`${API_BASE_URL}/api/life/habitos`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/habitos`, {
       headers: getHeaders()
     });
     if (!res.ok) throw new Error(`Erro ao listar hábitos: HTTP ${res.status}`);
@@ -174,7 +222,8 @@ export const agentApi = {
   },
 
   async checkinHabito(habitoId: number): Promise<any> {
-    const res = await fetch(`${API_BASE_URL}/api/life/habitos/${habitoId}/checkin`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/habitos/${habitoId}/checkin`, {
       method: 'POST',
       headers: getHeaders()
     });
@@ -184,6 +233,7 @@ export const agentApi = {
 
   // 5. Transcrição de Áudio
   async transcreverAudio(audioUri: string, fileName: string = 'audio.m4a'): Promise<string> {
+    const base = getApiBaseUrl();
     const formData = new FormData();
     formData.append('arquivo', {
       uri: audioUri,
@@ -191,7 +241,7 @@ export const agentApi = {
       type: 'audio/m4a'
     } as any);
 
-    const res = await fetch(`${API_BASE_URL}/transcrever`, {
+    const res = await fetch(`${base}/transcrever`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${API_TOKEN}`
@@ -209,7 +259,8 @@ export const agentApi = {
     chatId?: string,
     onChunk?: (chunk: string) => void
   ): Promise<string> {
-    const res = await fetch(`${API_BASE_URL}/chat`, {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/chat`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
