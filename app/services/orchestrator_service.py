@@ -193,7 +193,10 @@ class OrchestratorService:
                     f"- Finanças de Hoje: Teto diário = R$ {teto_diario:.2f} | Gastos hoje = R$ {gastos_hoje:.2f} | Saldo livre restante hoje = R$ {saldo_livre:.2f}\n"
                     f"- Saldos das Caixas: Reserva/Metas: R$ {reserva_metas:.2f} | Livre/Lazer: R$ {caixa_lazer:.2f} | Fixos: R$ {custos_fixos:.2f}\n"
                     f"DIRETRIZES DE ASSISTÊNCIA INTEGRAL:\n"
-                    f"1. Você é o assistente pessoal integral e consultor estratégico. Sempre que o usuário mencionar gastos, ganhos ou compras, use 'gerenciar_financas_life_os' para registrar e avalie ativamente o impacto no teto diário e nas metas.\n"
+                    f"1. Você é o assistente pessoal integral e consultor estratégico. Preste total atenção na intenção financeira:\n"
+                    f"   - POSSE OU RECEBIMENTO: Se o usuário falar sobre dinheiro que TEM, RECEBEU, GUARDOU ou ESTÁ EM CAIXA (ex: 'tenho 200 reais em caixa', 'estou com 300 na caixinha', 'guardado no banco', 'em dinheiro/espécie'), use acao='registrar_receita' (categoria='apenas_recebimento' ou 'construcao_futuro'). NUNCA chame 'registrar_gasto' para dinheiro que o usuário possui ou tem em caixa!\n"
+                    f"   - PLANEJAMENTO FUTURO: Se ele disser que tem dinheiro 'para gastar em um evento dia 25', isso é um orçamento futuro, e NÃO uma despesa realizada hoje. Registre o valor disponível como receita/caixa ou adicione um lembrete no Life OS, mas NUNCA debite como gasto de hoje.\n"
+                    f"   - GASTO REALIZADO: Use acao='registrar_gasto' EXCLUSIVAMENTE quando o usuário afirmar que já gastou, comprou ou pagou algo (ex: 'gastei 50', 'comprei almoço', 'paguei conta').\n"
                     f"2. Se o usuário falar sobre compromissos ou tarefas a fazer, use 'gerenciar_life_os' para registrar com data/horário e sugira um micro-passo de 2 minutos para iniciar.\n"
                     f"3. Dê conselhos reais e personalizados, nunca apenas respostas genéricas."
                 )

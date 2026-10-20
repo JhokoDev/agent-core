@@ -1030,6 +1030,16 @@ class FerramentaConsultorFinanceiroLifeOS(FerramentaBase):
         ma = str(argumentos.get("ma", "")).strip()
 
         try:
+            # Heurística de proteção anti-inversão:
+            # Se a IA enviar acao="registrar_gasto", mas a descrição indicar dinheiro que o usuário POSSUI/TEM/GUARDOU,
+            # redireciona automaticamente para registro de entrada/receita.
+            termos_posse = ["guardado", "em caixa", "tenho", "recebi", "ganhei", "na caixinha", "em conta", "poupado", "saldo", "em espécie", "em dinheiro"]
+            desc_lower = (descricao + " " + item).lower()
+            if acao in ("registrar_gasto", "gasto", "despesa") and any(t in desc_lower for t in termos_posse):
+                acao = "registrar_receita"
+                if categoria == "livre_lazer":
+                    categoria = "apenas_recebimento"
+
             if acao in ("registrar_gasto", "gasto", "despesa"):
                 if valor <= 0:
                     return "Erro: Informe um valor numérico positivo para registrar o gasto."
