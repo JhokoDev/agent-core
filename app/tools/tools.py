@@ -1055,20 +1055,22 @@ class FerramentaConsultorFinanceiroLifeOS(FerramentaBase):
             elif acao in ("registrar_receita", "receita", "ganho", "ganhei"):
                 if valor <= 0:
                     return "Erro: Informe um valor positivo para a receita."
+                if categoria not in ("custos_fixos", "construcao_futuro", "autoaperfeicoamento", "livre_lazer", "apenas_recebimento"):
+                    categoria = "apenas_recebimento"
                 tid = life_os_service.db.registrar_transacao(
                     tipo="receita",
                     valor=valor,
-                    categoria=categoria if categoria in ("custos_fixos", "construcao_futuro", "autoaperfeicoamento", "livre_lazer") else "construcao_futuro",
-                    descricao=descricao or "Entrada / Receita",
+                    categoria=categoria,
+                    descricao=descricao or "Entrada / Recebimento",
                     origem="chat_assistente",
                     ma=ma
                 )
                 caixas = life_os_service.obter_saldo_caixas()
-                reserva = caixas.get("caixas", {}).get("construcao_futuro", {}).get("saldo", 0.0)
                 ma_info = f" (ma: '{ma}')" if ma else ""
+                cat_label = "Apenas Recebimento" if categoria == "apenas_recebimento" else categoria
                 return (
-                    f"Sucesso: Entrada de R$ {valor:.2f} ('{descricao or 'Receita'}'){ma_info} registrada na caixa '{categoria}'! "
-                    f"Sua caixa Reserva & Metas agora possui R$ {reserva:.2f}."
+                    f"Sucesso: Entrada de R$ {valor:.2f} ('{descricao or 'Receita'}'){ma_info} registrada com sucesso na categoria '{cat_label}'! "
+                    f"Saldo total e fluxo financeiro atualizados no Life OS."
                 )
 
             elif acao in ("consultar_saldo", "saldo", "caixas", "consultar_caixas"):

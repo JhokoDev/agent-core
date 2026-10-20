@@ -794,7 +794,7 @@ def criar_registry_padrao() -> ToolRegistry:
                 "categoria": {
                     "tipo": "string",
                     "obrigatorio": False,
-                    "descricao": "Caixa de destino: 'livre_lazer', 'custos_fixos', 'construcao_futuro', 'autoaperfeicoamento'."
+                    "descricao": "Caixa de destino: 'apenas_recebimento', 'livre_lazer', 'custos_fixos', 'construcao_futuro', 'autoaperfeicoamento'."
                 },
                 "item": {
                     "tipo": "string",

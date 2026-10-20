@@ -12,6 +12,7 @@ CategoriaFinanceiraTipo = Literal[
     "construcao_futuro",
     "autoaperfeicoamento",
     "livre_lazer",
+    "apenas_recebimento",
     "outros"
 ]
 

@@ -19,6 +19,23 @@ import {
   CategoriaCaixa
 } from '../../src/types';
 
+function getCategoriaLabel(cat: string): string {
+  switch (cat) {
+    case 'apenas_recebimento':
+      return 'Apenas Recebimento';
+    case 'custos_fixos':
+      return 'Custos Fixos';
+    case 'construcao_futuro':
+      return 'Reserva & Metas';
+    case 'autoaperfeicoamento':
+      return 'Estudos & Dev';
+    case 'livre_lazer':
+      return 'Livre / Lazer';
+    default:
+      return cat;
+  }
+}
+
 export default function FinancesScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -70,7 +87,7 @@ export default function FinancesScreen() {
 
   const abrirModalTransacao = (tipo: 'receita' | 'despesa') => {
     setTipoTransacao(tipo);
-    setCategoriaTransacao(tipo === 'receita' ? 'construcao_futuro' : 'livre_lazer');
+    setCategoriaTransacao(tipo === 'receita' ? 'apenas_recebimento' : 'livre_lazer');
     setValorTransacao('');
     setDescricaoTransacao('');
     setCampoMa('');
@@ -300,6 +317,20 @@ export default function FinancesScreen() {
           </Text>
           <Text style={styles.boxDesc}>Para gastar livre sem peso na consciência</Text>
         </View>
+
+        {/* Caixa Adicional: Apenas Recebimento (se houver recebimentos registrados) */}
+        {((saldoCaixas?.caixas?.apenas_recebimento?.saldo || 0) > 0 || (saldoCaixas?.caixas?.apenas_recebimento?.receitas || 0) > 0) && (
+          <View style={[styles.boxCard, { width: '100%', borderColor: '#10b981', marginTop: 8 }]}>
+            <View style={styles.boxHeader}>
+              <Text style={{ fontSize: 18 }}>💵</Text>
+              <Text style={[styles.boxName, { color: '#34d399' }]}>Apenas Recebimento</Text>
+            </View>
+            <Text style={[styles.boxSaldo, { color: '#34d399' }]}>
+              R$ {(saldoCaixas?.caixas?.apenas_recebimento?.saldo || 0).toFixed(2)}
+            </Text>
+            <Text style={styles.boxDesc}>Entradas financeiras registradas diretamente no fluxo</Text>
+          </View>
+        )}
       </View>
 
       {/* 4. EXTRATO HISTÓRICO DE TRANSAÇÕES */}
@@ -324,7 +355,7 @@ export default function FinancesScreen() {
               </View>
               <View style={{ flex: 1, marginLeft: 10 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-                  <Text style={styles.transTitle}>{t.descricao || t.categoria}</Text>
+                  <Text style={styles.transTitle}>{t.descricao || getCategoriaLabel(t.categoria)}</Text>
                   {!!t.ma && (
                     <View style={styles.maBadge}>
                       <Text style={styles.maBadgeText}>ma: {t.ma}</Text>
@@ -332,7 +363,7 @@ export default function FinancesScreen() {
                   )}
                 </View>
                 <Text style={styles.transSub}>
-                  {t.data_hora.substring(0, 10)} · {t.origem.replace('_', ' ')}
+                  {t.data_hora.substring(0, 10)} · {getCategoriaLabel(t.categoria)} · {t.origem.replace('_', ' ')}
                   {!isReceita && t.horas_vida ? ` · Custa ${t.horas_vida.toFixed(1)}h de foco` : ''}
                 </Text>
               </View>
@@ -360,7 +391,7 @@ export default function FinancesScreen() {
                 style={[styles.modalTypeBtn, tipoTransacao === 'receita' && styles.modalTypeBtnActiveIncome]}
                 onPress={() => {
                   setTipoTransacao('receita');
-                  setCategoriaTransacao('construcao_futuro');
+                  setCategoriaTransacao('apenas_recebimento');
                 }}
               >
                 <Text style={[styles.modalTypeBtnText, tipoTransacao === 'receita' && { color: '#10b981' }]}>
@@ -412,19 +443,31 @@ export default function FinancesScreen() {
             />
 
             {/* Seletor de Caixa de Destino */}
-            <Text style={styles.inputLabel}>ALOCAR NA CAIXA:</Text>
-            <View style={styles.categoryPickerRow}>
-              {[
-                { id: 'livre_lazer', label: '🍕 Lazer' },
-                { id: 'custos_fixos', label: '🏢 Fixos' },
-                { id: 'construcao_futuro', label: '🚀 Reserva' },
-                { id: 'autoaperfeicoamento', label: '📚 Estudos' }
-              ].map((cat) => (
+            <Text style={styles.inputLabel}>
+              {tipoTransacao === 'receita' ? 'CATEGORIA DO RECEBIMENTO:' : 'ALOCAR NA CAIXA:'}
+            </Text>
+            <View style={[styles.categoryPickerRow, { flexWrap: 'wrap', gap: 6 }]}>
+              {(tipoTransacao === 'receita'
+                ? [
+                    { id: 'apenas_recebimento', label: '💵 Apenas Recebimento' },
+                    { id: 'construcao_futuro', label: '🚀 Reserva' },
+                    { id: 'custos_fixos', label: '🏢 Fixos' },
+                    { id: 'autoaperfeicoamento', label: '📚 Estudos' },
+                    { id: 'livre_lazer', label: '🍕 Lazer' }
+                  ]
+                : [
+                    { id: 'livre_lazer', label: '🍕 Lazer' },
+                    { id: 'custos_fixos', label: '🏢 Fixos' },
+                    { id: 'construcao_futuro', label: '🚀 Reserva' },
+                    { id: 'autoaperfeicoamento', label: '📚 Estudos' }
+                  ]
+              ).map((cat) => (
                 <TouchableOpacity
                   key={cat.id}
                   style={[
                     styles.categoryChip,
-                    categoriaTransacao === cat.id && styles.categoryChipActive
+                    categoriaTransacao === cat.id && styles.categoryChipActive,
+                    tipoTransacao === 'receita' && { minWidth: '45%', flexGrow: 1 }
                   ]}
                   onPress={() => setCategoriaTransacao(cat.id as CategoriaCaixa)}
                 >

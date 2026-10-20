@@ -45,7 +45,7 @@ export interface DashboardStatus {
   habitos: Habito[];
 }
 
-export type CategoriaCaixa = 'custos_fixos' | 'construcao_futuro' | 'autoaperfeicoamento' | 'livre_lazer';
+export type CategoriaCaixa = 'custos_fixos' | 'construcao_futuro' | 'autoaperfeicoamento' | 'livre_lazer' | 'apenas_recebimento';
 
 export interface CaixaItem {
   despesas: number;
@@ -59,6 +59,7 @@ export interface SaldoCaixasResponse {
     construcao_futuro: CaixaItem;
     autoaperfeicoamento: CaixaItem;
     livre_lazer: CaixaItem;
+    apenas_recebimento?: CaixaItem;
   };
   teto_diario_livre: number;
   gastos_hoje: number;

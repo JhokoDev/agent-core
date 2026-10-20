@@ -563,7 +563,8 @@ class LifeOSDatabase:
                 "custos_fixos": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0},
                 "construcao_futuro": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0},
                 "autoaperfeicoamento": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0},
-                "livre_lazer": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0}
+                "livre_lazer": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0},
+                "apenas_recebimento": {"despesas": 0.0, "receitas": 0.0, "saldo": 0.0}
             }
 
             multas_total = 0.0
@@ -579,7 +580,7 @@ class LifeOSDatabase:
                     continue
 
                 if cat not in caixas:
-                    cat = "livre_lazer"
+                    cat = "apenas_recebimento" if tipo == "receita" else "livre_lazer"
                 if tipo == "receita":
                     caixas[cat]["receitas"] += tot
                 else:
