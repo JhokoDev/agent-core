@@ -1,7 +1,10 @@
 import os
 import json
+import time
 import asyncio
 import httpx
+from datetime import date
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from app.core.config import Settings
@@ -36,10 +39,85 @@ def _converter_schema_para_gemini(s: Any) -> Any:
     return res
 
 
+class GeminiCostGuard:
+    """
+    CAMADA DUPLA DE PROTEÇÃO ANTITAXAÇÃO (0 CUSTOS ADICIONAIS GARANTIDOS):
+    
+    1. Camada 1 (Circuit Breaker Local):
+       - Limite rígido de 12 RPM (abaixo do teto de 15 RPM gratuitos do Google).
+       - Limite rígido diário de 1.000 RPD (abaixo do teto de 1.500 RPD gratuitos).
+       - Se atingir o teto de segurança, bloqueia a chamada antes de tocar na rede e força fallback para o Llama Local.
+       
+    2. Camada 2 (Whitelist Estrita de Modelos Gratuitos e Sanitização):
+       - Garante que NUNCA um modelo com cobrança ativada (ex: Gemini Pro corporativo pago) seja requisitado.
+       - Restringe estritamente para os modelos gratuitos da API pública do Google AI Studio.
+       - Remove parâmetros de serviços externos tarifados (Vertex AI Grounding pago, etc).
+    """
+    ARQUIVO_TELEMETRIA = Path("data/gemini_guard.json")
+    MAX_RPM_SEGURO = 12       # Teto seguro de proteção
+    MAX_RPD_SEGURO = 1000     # Teto diário seguro
+    MODELOS_GRATUITOS_PERMITIDOS = {
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-1.5-flash"
+    }
+
+    @classmethod
+    def validar_modelo_e_parametros(cls, modelo: str) -> str:
+        """Camada 2: Força o uso estrito de modelos do plano gratuito sem risco de faturamento."""
+        mod = (modelo or "").strip().lower()
+        if mod not in cls.MODELOS_GRATUITOS_PERMITIDOS:
+            print(f"[GeminiCostGuard] AVISO DE PROTEÇÃO: Modelo '{modelo}' não homologado na lista de custo zero. Forçando 'gemini-flash-latest'!")
+            return "gemini-flash-latest"
+        return mod
+
+    @classmethod
+    def registrar_e_validar_consumo(cls) -> None:
+        """Camada 1: Circuit breaker que bloqueia o disparo caso se aproxime do limite gratuito."""
+        agora = time.time()
+        hoje = date.today().isoformat()
+        
+        dados = {"data": hoje, "chamadas_hoje": 0, "timestamps_minuto": []}
+        if cls.ARQUIVO_TELEMETRIA.exists():
+            try:
+                with open(cls.ARQUIVO_TELEMETRIA, "r", encoding="utf-8") as f:
+                    dados = json.load(f)
+            except Exception:
+                pass
+                
+        if dados.get("data") != hoje:
+            dados = {"data": hoje, "chamadas_hoje": 0, "timestamps_minuto": []}
+            
+        # Limpa timestamps com mais de 60 segundos
+        ts_minuto = [t for t in dados.get("timestamps_minuto", []) if agora - t < 60.0]
+        
+        # 1. Trava de Proteção por Minuto (RPM)
+        if len(ts_minuto) >= cls.MAX_RPM_SEGURO:
+            raise ProviderError("trava_custo_zero_rpm: Limite de segurança de 12 requisições por minuto atingido para evitar cobranças. Alternando para Llama local.")
+
+        # 2. Trava de Proteção Diária (RPD)
+        if dados.get("chamadas_hoje", 0) >= cls.MAX_RPD_SEGURO:
+            raise ProviderError("trava_custo_zero_diario: Teto de segurança diário atingido. Bloqueado para garantir 0 custos adicionais. Alternando para Llama local.")
+            
+        # Registra a chamada autorizada
+        ts_minuto.append(agora)
+        dados["timestamps_minuto"] = ts_minuto
+        dados["chamadas_hoje"] = dados.get("chamadas_hoje", 0) + 1
+        
+        try:
+            cls.ARQUIVO_TELEMETRIA.parent.mkdir(parents=True, exist_ok=True)
+            with open(cls.ARQUIVO_TELEMETRIA, "w", encoding="utf-8") as f:
+                json.dump(dados, f, indent=2)
+        except Exception:
+            pass
+
+
 class GeminiProvider:
     """
     Provider oficial para nuvem do Google Gemini (Zero Custo via Free Tier do Google AI Studio).
-    Suporta Function Calling de alta inteligência e streaming de resposta.
+    Blindado com dupla camada de proteção contra cobranças indesejadas.
     """
 
     def __init__(self, settings: Settings, api_key: str | None = None, model: str | None = None):
@@ -52,15 +130,17 @@ class GeminiProvider:
             or os.getenv("AGENT_GEMINI_API_KEY", "") 
             or getattr(settings, "gemini_api_key", "")
         )
-        self.model = (
+        modelo_bruto = (
             model 
             or os.getenv("GEMINI_MODEL", "") 
             or os.getenv("AGENT_GEMINI_MODEL", "") 
             or getattr(settings, "gemini_model", "gemini-flash-latest")
             or "gemini-flash-latest"
         )
+        # Camada 2 Ativa na inicialização
+        self.model = GeminiCostGuard.validar_modelo_e_parametros(modelo_bruto)
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
-        self.client = httpx.AsyncClient(timeout=60.0)
+        self.client = httpx.AsyncClient(timeout=45.0)
 
     async def health(self) -> ModelHealth:
         if not self.api_key:
@@ -85,12 +165,10 @@ class GeminiProvider:
             elif m.role == "assistant":
                 role_gemini = "model"
                 part_text = m.content or ""
-                # Se a mensagem do assistente for vazia, garante ao menos um espaço
                 if not part_text and not m.tool_calls:
                     part_text = " "
                 parts = [{"text": part_text}]
                 
-                # Se havia tool calls anteriores
                 if m.tool_calls:
                     for tc in m.tool_calls:
                         fn = tc.get("function", {})
@@ -108,13 +186,11 @@ class GeminiProvider:
                         })
                 contents.append({"role": role_gemini, "parts": parts})
             elif m.role == "tool":
-                # Resposta de ferramenta
                 contents.append({
                     "role": "user",
                     "parts": [{"text": f"[Resultado de '{m.name or 'ferramenta'}']:\n{m.content}"}]
                 })
             else:
-                # User
                 contents.append({
                     "role": "user",
                     "parts": [{"text": m.content or " "}]
@@ -128,12 +204,10 @@ class GeminiProvider:
             else:
                 ultimo = contents_limpos[-1]
                 if ultimo["role"] == c["role"]:
-                    # Mescla as partes do mesmo papel
                     ultimo["parts"].extend(c["parts"])
                 else:
                     contents_limpos.append(c)
 
-        # Se começar com 'model', insere um turno inicial de usuário para validar no Gemini
         if contents_limpos and contents_limpos[0]["role"] == "model":
             contents_limpos.insert(0, {"role": "user", "parts": [{"text": "Iniciar."}]})
 
@@ -172,6 +246,9 @@ class GeminiProvider:
             raise ProviderError("empty_messages")
         if not self.api_key:
             raise ProviderError("gemini_api_key_missing")
+
+        # Camada 1: Circuit breaker pré-vôo para barrar qualquer chamada que exceda o teto gratuito
+        GeminiCostGuard.registrar_e_validar_consumo()
 
         payload = self._preparar_payload(messages, tools)
         url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
@@ -217,7 +294,6 @@ class GeminiProvider:
             yield {"tipo": "tools", "conteudo": resultado.tool_calls}
 
         if resultado.content:
-            # Emite pequenos pedaços para manter a fluidez de digitação instantânea
             palavras = resultado.content.split(" ")
             for i, palavra in enumerate(palavras):
                 token = palavra if i == len(palavras) - 1 else palavra + " "

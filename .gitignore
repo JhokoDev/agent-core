@@ -54,3 +54,7 @@ Thumbs.db
 uploads/
 agent-core-diagnostico/
 temp_audio_*
+
+data/life_os.db*
+data/gemini_guard.json
+data/backups/

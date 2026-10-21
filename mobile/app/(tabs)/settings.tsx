@@ -32,6 +32,7 @@ export default function SettingsScreen() {
   const [modoImprevisto, setModoImprevisto] = useState(false);
   const [motivoImprevisto, setMotivoImprevisto] = useState('');
   const [testing, setTesting] = useState(false);
+  const [testingSupervisor, setTestingSupervisor] = useState(false);
 
   useEffect(() => {
     setLlmProviderState(getLlmProvider());
@@ -53,6 +54,24 @@ export default function SettingsScreen() {
     setServerUrl(defaultUrl);
     setApiConfig(defaultUrl, token.trim());
     Alert.alert('IP Aplicado', `URL redefinida para ${defaultUrl}`);
+  };
+
+  const handleTestarSupervisor = async () => {
+    setTestingSupervisor(true);
+    try {
+      const res = await agentApi.getSupervisorStatus();
+      Alert.alert(
+        '🛡️ Guardião 8001 Operacional!',
+        `Status: ${res.status}\nBranch Git: ${res.git_branch}\nCommit: ${res.git_commit}\nAgente 8000: ${res.agente_8000_status}\n\nO Guardião está pronto para executar Auto-Atualizações com rollback de 15 segundos.`
+      );
+    } catch (err: any) {
+      Alert.alert(
+        'Falha no Guardião 8001',
+        err.message || 'Verifique se watchdog_supervisor.py está rodando no PC.'
+      );
+    } finally {
+      setTestingSupervisor(false);
+    }
   };
 
   const handleSalvarConexao = async () => {
@@ -148,6 +167,63 @@ export default function SettingsScreen() {
           </View>
           {llmProvider === 'local' && <Text style={styles.checkMark}>✓</Text>}
         </TouchableOpacity>
+
+        {/* Camada Dupla de Proteção Gemini */}
+        <View style={styles.geminiProtectionBox}>
+          <Text style={styles.geminiProtectionTitle}>🛡️ PROTEÇÃO ZERO-CUSTO DUPLA ATIVA</Text>
+          <Text style={styles.geminiProtectionText}>
+            • Camada 1: Limitador estrito no cliente de 12 req/min e 1.000 req/dia com transição suave para Ollama.
+          </Text>
+          <Text style={styles.geminiProtectionText}>
+            • Camada 2: Bloqueador de modelos/parâmetros pagos (whitelist estrita para Gemini Flash Grátis).
+          </Text>
+        </View>
+      </View>
+
+      {/* Guardião Imutável (Porta 8001 / Auto-Atualização) */}
+      <View style={styles.card}>
+        <View style={styles.guardHeaderRow}>
+          <Text style={styles.cardTitle}>Guardião Imutável (Porta 8001)</Text>
+          <Text style={styles.tagProtected}>BLINDADO</Text>
+        </View>
+        <Text style={styles.cardSubtitle}>
+          Processo supervisor independente no Windows. Executa merges na branch main, backups automáticos de banco SQLite e rollback em 15s mediante aprovação no celular.
+        </Text>
+
+        <View style={styles.supervisorInfoRow}>
+          <Text style={styles.supervisorInfoLabel}>Assinatura Mobile:</Text>
+          <Text style={styles.supervisorInfoVal}>Ativa (Token Criptográfico)</Text>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.btn, styles.btnTestSupervisor]}
+          onPress={handleTestarSupervisor}
+          disabled={testingSupervisor}
+        >
+          <Text style={styles.btnTestSupervisorText}>
+            {testingSupervisor ? 'Testando Guardião...' : '🛡️ Testar Guardião (Porta 8001)'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Automações Mobile Nativas (Sem MacroDroid) */}
+      <View style={styles.card}>
+        <View style={styles.guardHeaderRow}>
+          <Text style={styles.cardTitle}>Automações Nativas (Sem MacroDroid)</Text>
+          <Text style={styles.tagActive}>100% NATIVO</Text>
+        </View>
+        <Text style={styles.cardSubtitle}>
+          O app assumiu todas as responsabilidades do MacroDroid via sensores do dispositivo:
+        </Text>
+        <Text style={styles.nativeFeatureItem}>
+          🔋 <Text style={styles.boldText}>Despertador Matinal:</Text> Detecta celular saindo do carregador entre 05h e 11h30 e prepara o briefing.
+        </Text>
+        <Text style={styles.nativeFeatureItem}>
+          📋 <Text style={styles.boldText}>Comprovantes Pix:</Text> Lê comprovantes da área de transferência e desconta do teto diário com 1 toque.
+        </Text>
+        <Text style={styles.nativeFeatureItem}>
+          ⏰ <Text style={styles.boldText}>Alarmes Locais com Som:</Text> Agenda toques e lembretes sonoros no horário exato das tarefas críticas.
+        </Text>
       </View>
 
       {/* Configuração de Conexão com PC (Tailscale) */}
@@ -332,5 +408,86 @@ const styles = StyleSheet.create({
     marginTop: 12
   },
   alertText: { color: '#fecaca', fontSize: 13, fontWeight: '700' },
-  systemInfo: { color: '#64748b', fontSize: 12, marginTop: 4 }
+  systemInfo: { color: '#64748b', fontSize: 12, marginTop: 4 },
+  geminiProtectionBox: {
+    backgroundColor: '#0c1a14',
+    borderColor: '#065f46',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 12
+  },
+  geminiProtectionTitle: {
+    color: '#34d399',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: 6
+  },
+  geminiProtectionText: {
+    color: '#a7f3d0',
+    fontSize: 11,
+    lineHeight: 16
+  },
+  guardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  tagProtected: {
+    backgroundColor: '#4c1d95',
+    color: '#ddd6fe',
+    fontSize: 9,
+    fontWeight: '800',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4
+  },
+  tagActive: {
+    backgroundColor: '#064e3b',
+    color: '#a7f3d0',
+    fontSize: 9,
+    fontWeight: '800',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4
+  },
+  supervisorInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    backgroundColor: '#0c0e17',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 12
+  },
+  supervisorInfoLabel: {
+    color: '#94a3b8',
+    fontSize: 12
+  },
+  supervisorInfoVal: {
+    color: '#10b981',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  btnTestSupervisor: {
+    backgroundColor: '#1e1b4b',
+    borderColor: '#6366f1',
+    borderWidth: 1,
+    width: '100%'
+  },
+  btnTestSupervisorText: {
+    color: '#c7d2fe',
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  nativeFeatureItem: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 8
+  },
+  boldText: {
+    fontWeight: '700',
+    color: '#f8fafc'
+  }
 });

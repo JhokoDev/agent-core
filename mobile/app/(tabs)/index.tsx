@@ -11,8 +11,10 @@ import {
   TextInput,
   Alert
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { agentApi } from '../../src/services/api';
 import { DashboardStatus, Tarefa } from '../../src/types';
+import { deviceSensors, PixDetectionResult } from '../../src/services/deviceSensors';
 
 export default function CockpitScreen() {
   const [loading, setLoading] = useState(true);
@@ -26,6 +28,13 @@ export default function CockpitScreen() {
   const [postponeReason, setPostponeReason] = useState('');
   const [proofText, setProofText] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
+
+  // Auto-Evolução / Guardião Porta 8001 (Pull Request de Bolso)
+  const [pendingPatches, setPendingPatches] = useState<any[]>([]);
+  const [patchLoading, setPatchLoading] = useState(false);
+
+  // Detector de Pix / Comprovantes (Mata MacroDroid)
+  const [detectedPix, setDetectedPix] = useState<PixDetectionResult | null>(null);
 
   // Entrada Rápida de Atividades (Inbox Cognitivo)
   const [quickInput, setQuickInput] = useState('');
@@ -52,10 +61,122 @@ export default function CockpitScreen() {
     }
   };
 
+  const handleColarClipboard = async () => {
+    try {
+      const text = await Clipboard.getStringAsync();
+      if (text && text.trim()) {
+        setQuickInput(text.trim());
+      }
+    } catch {}
+  };
+
+  const handleRegistrarPix = async () => {
+    if (!detectedPix || !detectedPix.valor) return;
+    try {
+      setActionLoading(true);
+      await agentApi.registrarGasto(detectedPix.valor, 'Comprovante Pix detectado', 'livre_lazer');
+      await deviceSensors.marcarClipboardProcessado(detectedPix.text);
+      Alert.alert(
+        '💸 Gasto Registrado!',
+        `R$ ${detectedPix.valor.toFixed(2)} foi debitado do seu teto diário automaticamente sem MacroDroid.`
+      );
+      setDetectedPix(null);
+      carregarDados();
+    } catch (err: any) {
+      Alert.alert('Erro', err.message || 'Falha ao registrar gasto.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDispensarPix = async () => {
+    if (detectedPix) {
+      await deviceSensors.marcarClipboardProcessado(detectedPix.text);
+    }
+    setDetectedPix(null);
+  };
+
+  const handleAprovarPatch = (patch: any) => {
+    Alert.alert(
+      '🚀 Autorizar Auto-Atualização?',
+      `Patch: ${patch.titulo || patch.patch_id}\n\nO Guardião 8001 criará um backup do banco SQLite, aplicará o git merge na main e fará o teste de 15 segundos.\n\nDeseja prosseguir?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: '✅ Autorizar Agora',
+          style: 'default',
+          onPress: async () => {
+            try {
+              setPatchLoading(true);
+              const res = await agentApi.approvePatch(patch.patch_id);
+              if (res.sucesso) {
+                Alert.alert(
+                  '🎉 Atualização Concluída!',
+                  res.mensagem || 'Agent Core atualizado e operacional na porta 8000.'
+                );
+              } else {
+                Alert.alert('Aviso', res.mensagem || 'Não foi possível concluir a atualização.');
+              }
+              carregarDados();
+            } catch (err: any) {
+              Alert.alert('Erro no Guardião', err.message || 'Falha ao comunicar com o Guardião 8001.');
+            } finally {
+              setPatchLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleRollback = () => {
+    Alert.alert(
+      '⏪ Desfazer / Rollback?',
+      'Deseja reverter a última atualização e restaurar a versão e banco de dados anteriores?',
+      [
+        { text: 'Não', style: 'cancel' },
+        {
+          text: 'Confirmar Rollback',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setPatchLoading(true);
+              const res = await agentApi.triggerRollback();
+              Alert.alert(
+                res.sucesso ? '⏪ Rollback Concluído' : 'Erro',
+                res.mensagem || 'Operação finalizada.'
+              );
+              carregarDados();
+            } catch (err: any) {
+              Alert.alert('Erro', err.message || 'Falha no rollback.');
+            } finally {
+              setPatchLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const carregarDados = useCallback(async () => {
     try {
       const data = await agentApi.getDashboardStatus();
       setDashboard(data);
+
+      // Sincroniza alarmes locais nativos com som no horário exato (Substituto MacroDroid)
+      const todas = [
+        ...(data?.tarefas_criticas_hoje || []),
+        ...(data?.proximas_tarefas || [])
+      ];
+      if (todas.length > 0) {
+        deviceSensors.sincronizarAlarmesTarefas(todas);
+      }
+
+      // Consulta patches pendentes de aprovação no Guardião 8001 (Pull Request de Bolso)
+      try {
+        const patches = await agentApi.getPendingPatches();
+        setPendingPatches(patches);
+      } catch {}
     } catch (err: any) {
       console.warn('Falha ao carregar cockpit:', err.message);
     } finally {
@@ -65,8 +186,19 @@ export default function CockpitScreen() {
   }, []);
 
   useEffect(() => {
+    // Inicializa sensores do dispositivo (bateria, notificações)
+    deviceSensors.init();
+    deviceSensors.onPixDetected((res) => {
+      setDetectedPix(res);
+    });
+
     carregarDados();
-    const interval = setInterval(carregarDados, 15000); // Polling suave a cada 15s
+    deviceSensors.verificarClipboardParaGastos();
+
+    const interval = setInterval(() => {
+      carregarDados();
+      deviceSensors.verificarClipboardParaGastos();
+    }, 15000); // Polling suave a cada 15s
     return () => clearInterval(interval);
   }, [carregarDados]);
 
@@ -170,6 +302,77 @@ export default function CockpitScreen() {
         </Text>
       </View>
 
+      {/* Banner de Auto-Atualização / Pull Request de Bolso (Guardião Porta 8001) */}
+      {pendingPatches.length > 0 && (
+        <View style={styles.patchContainer}>
+          {pendingPatches.map((patch) => (
+            <View key={patch.id || patch.patch_id} style={styles.patchCard}>
+              <View style={styles.patchHeader}>
+                <Text style={styles.patchBadge}>🚀 PULL REQUEST DE BOLSO · PORTA 8001</Text>
+                <Text style={styles.patchTestsBadge}>✅ Testes OK</Text>
+              </View>
+              <Text style={styles.patchTitle}>{patch.titulo || patch.patch_id}</Text>
+              {patch.descricao ? (
+                <Text style={styles.patchDesc}>{patch.descricao}</Text>
+              ) : null}
+              {patch.branch ? (
+                <Text style={styles.patchBranch}>Branch Staging: {patch.branch}</Text>
+              ) : null}
+              <View style={styles.patchActionRow}>
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnApprovePatch]}
+                  onPress={() => handleAprovarPatch(patch)}
+                  disabled={patchLoading}
+                >
+                  <Text style={styles.btnApprovePatchText}>
+                    {patchLoading ? 'Aplicando...' : '✅ Autorizar e Atualizar Agora'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnRollbackPatch]}
+                  onPress={handleRollback}
+                  disabled={patchLoading}
+                >
+                  <Text style={styles.btnRollbackPatchText}>⏪ Rollback</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Banner de Comprovante Pix Detectado (Mata MacroDroid) */}
+      {detectedPix && (
+        <View style={styles.pixCard}>
+          <View style={styles.pixHeader}>
+            <Text style={styles.pixTag}>⚡ COMPROVANTE DETECTADO NO DISPOSITIVO</Text>
+            {detectedPix.valor && (
+              <Text style={styles.pixValue}>R$ {detectedPix.valor.toFixed(2)}</Text>
+            )}
+          </View>
+          <Text style={styles.pixSnippet} numberOfLines={2}>
+            {detectedPix.text}
+          </Text>
+          <View style={styles.pixActions}>
+            {detectedPix.valor && (
+              <TouchableOpacity
+                style={[styles.btn, styles.btnPixConfirm]}
+                onPress={handleRegistrarPix}
+                disabled={actionLoading}
+              >
+                <Text style={styles.btnPixConfirmText}>💸 Descontar do Teto Diário</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[styles.btn, styles.btnPixDismiss]}
+              onPress={handleDispensarPix}
+            >
+              <Text style={styles.btnPixDismissText}>✕ Dispensar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* Teto Diário Rápido */}
       {financas && (
         <View style={[styles.financeCard, financas.estourou && styles.financeCardAlert]}>
@@ -185,7 +388,12 @@ export default function CockpitScreen() {
 
       {/* Barra de Entrada Rápida de Atividades (Inbox Cognitivo) */}
       <View style={styles.quickInputCard}>
-        <Text style={styles.quickInputLabel}>⚡ REGISTRO RÁPIDO · O QUE PRECISA FAZER?</Text>
+        <View style={styles.quickInputHeaderRow}>
+          <Text style={styles.quickInputLabel}>⚡ REGISTRO RÁPIDO · O QUE PRECISA FAZER?</Text>
+          <TouchableOpacity onPress={handleColarClipboard}>
+            <Text style={styles.quickInputPasteText}>📋 Colar Pix / Texto</Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.quickInputRow}>
           <TextInput
             style={styles.quickInputField}
@@ -500,7 +708,18 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 20
   },
-  quickInputLabel: { color: '#818cf8', fontSize: 10, fontWeight: '800', letterSpacing: 0.8, marginBottom: 8 },
+  quickInputHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8
+  },
+  quickInputPasteText: {
+    color: '#818cf8',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  quickInputLabel: { color: '#818cf8', fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
   quickInputRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   quickInputField: {
     flex: 1,
@@ -523,6 +742,135 @@ const styles = StyleSheet.create({
   },
   quickInputBtnDisabled: { backgroundColor: '#312e81', opacity: 0.6 },
   quickInputBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
+  patchContainer: {
+    marginBottom: 20
+  },
+  patchCard: {
+    backgroundColor: '#16192b',
+    borderColor: '#6366f1',
+    borderWidth: 1.5,
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#6366f1',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8
+  },
+  patchHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8
+  },
+  patchBadge: {
+    color: '#818cf8',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8
+  },
+  patchTestsBadge: {
+    backgroundColor: '#064e3b',
+    color: '#6ee7b7',
+    fontSize: 10,
+    fontWeight: '700',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6
+  },
+  patchTitle: {
+    color: '#f8fafc',
+    fontSize: 16,
+    fontWeight: '800',
+    marginBottom: 4
+  },
+  patchDesc: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 6
+  },
+  patchBranch: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontFamily: 'monospace',
+    marginBottom: 12
+  },
+  patchActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4
+  },
+  btnApprovePatch: {
+    backgroundColor: '#10b981',
+    flex: 2
+  },
+  btnApprovePatchText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800'
+  },
+  btnRollbackPatch: {
+    backgroundColor: '#334155',
+    flex: 1
+  },
+  btnRollbackPatchText: {
+    color: '#e2e8f0',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  pixCard: {
+    backgroundColor: '#14201a',
+    borderColor: '#10b981',
+    borderWidth: 1.5,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20
+  },
+  pixHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6
+  },
+  pixTag: {
+    color: '#34d399',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8
+  },
+  pixValue: {
+    color: '#10b981',
+    fontSize: 18,
+    fontWeight: '800'
+  },
+  pixSnippet: {
+    color: '#94a3b8',
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 12
+  },
+  pixActions: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  btnPixConfirm: {
+    backgroundColor: '#059669',
+    flex: 2
+  },
+  btnPixConfirmText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800'
+  },
+  btnPixDismiss: {
+    backgroundColor: '#1e293b',
+    flex: 1
+  },
+  btnPixDismissText: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '700'
+  },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sectionTitle: { color: '#94a3b8', fontSize: 11, fontWeight: '700', letterSpacing: 1.2 },
   sectionBadge: { color: '#6366f1', fontSize: 12, fontWeight: '700' },

@@ -67,6 +67,21 @@ export function getLlmProvider(): 'nuvem' | 'local' {
   return CURRENT_LLM_PROVIDER;
 }
 
+let MOBILE_APPROVAL_TOKEN = 'mobile_sec_approval_core_8001_secret_key_v1';
+
+AsyncStorage.getItem('@agent_core_mobile_approval_token').then((token) => {
+  if (token) MOBILE_APPROVAL_TOKEN = token;
+});
+
+export async function setMobileApprovalToken(token: string) {
+  MOBILE_APPROVAL_TOKEN = token;
+  await AsyncStorage.setItem('@agent_core_mobile_approval_token', token);
+}
+
+export function getMobileApprovalToken(): string {
+  return MOBILE_APPROVAL_TOKEN;
+}
+
 // Carrega preferências salvas no dispositivo e limpa entradas antigas com 127.0.0.1
 AsyncStorage.getItem('@agent_core_server_url').then((savedUrl) => {
   if (savedUrl) {
@@ -196,6 +211,23 @@ export const agentApi = {
       })
     });
     if (!res.ok) throw new Error(`Erro ao acionar preparação do PC: HTTP ${res.status}`);
+    return await res.json();
+  },
+
+  async enviarContextoSensores(dados: {
+    wifi?: string;
+    em_casa?: boolean;
+    carregador?: boolean;
+    bateria?: number;
+    tela_ligada?: boolean;
+  }): Promise<any> {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/life/sensores/contexto`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(dados)
+    });
+    if (!res.ok) throw new Error(`Erro ao enviar telemetria: HTTP ${res.status}`);
     return await res.json();
   },
 
@@ -430,5 +462,61 @@ export const agentApi = {
         })
       );
     });
+  },
+
+  // 7. Guardião Supervisor (Porta 8001 - Auto-Atualização Blindada)
+  async getSupervisorStatus(): Promise<any> {
+    const base = getApiBaseUrl();
+    const supervisorUrl = base.replace(/:8000$/, ':8001');
+    const res = await fetch(`${supervisorUrl}/supervisor/status`, {
+      headers: {
+        'Authorization': `Bearer ${MOBILE_APPROVAL_TOKEN}`
+      }
+    });
+    if (!res.ok) throw new Error(`Guardião 8001 offline: HTTP ${res.status}`);
+    return await res.json();
+  },
+
+  async getPendingPatches(): Promise<any[]> {
+    try {
+      const base = getApiBaseUrl();
+      const supervisorUrl = base.replace(/:8000$/, ':8001');
+      const res = await fetch(`${supervisorUrl}/supervisor/pending`, {
+        headers: {
+          'Authorization': `Bearer ${MOBILE_APPROVAL_TOKEN}`
+        }
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.pendentes || [];
+    } catch {
+      return [];
+    }
+  },
+
+  async approvePatch(patchId: string): Promise<any> {
+    const base = getApiBaseUrl();
+    const supervisorUrl = base.replace(/:8000$/, ':8001');
+    const res = await fetch(`${supervisorUrl}/supervisor/approve-update/${patchId}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${MOBILE_APPROVAL_TOKEN}`
+      }
+    });
+    if (!res.ok) throw new Error(`Erro ao aprovar patch: HTTP ${res.status}`);
+    return await res.json();
+  },
+
+  async triggerRollback(): Promise<any> {
+    const base = getApiBaseUrl();
+    const supervisorUrl = base.replace(/:8000$/, ':8001');
+    const res = await fetch(`${supervisorUrl}/supervisor/rollback`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${MOBILE_APPROVAL_TOKEN}`
+      }
+    });
+    if (!res.ok) throw new Error(`Erro no rollback: HTTP ${res.status}`);
+    return await res.json();
   }
 };
