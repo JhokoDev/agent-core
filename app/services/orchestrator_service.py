@@ -337,6 +337,58 @@ class OrchestratorService:
                     }
                 }]
 
+            # Fallback 2.9 (Motion-Style): Intenção direta de agendamento/lembrete com horário
+            if not tool_calls:
+                tem_gatilho_lembrete = any(t in texto_m for t in ["me lembre", "lembre", "lembrete", "não esqueça", "nao esqueca", "me avise", "avise", "tenho que levar", "tenho que ir", "tenho consulta", "tenho reunião", "tenho reuniao", "tenho evento"])
+                tem_horario = bool(re.search(r'\b\d{1,2}(:\d{2}|h)\b', texto_m))
+                if tem_gatilho_lembrete and tem_horario:
+                    tool_calls = [{
+                        "function": {
+                            "name": "gerenciar_life_os",
+                            "arguments": {
+                                "acao": "criar_tarefa",
+                                "titulo": mensagem
+                            }
+                        }
+                    }]
+
+            # Fallback 2.10 (Cleo-Style): Intenção direta de registro de gasto ou pedágio de compra
+            if not tool_calls:
+                if any(g in texto_m for g in ["gastei", "comprei", "paguei"]) and re.search(r'\b\d+(?:[\.,]\d+)?\b', texto_m):
+                    match_val = re.search(r'(\d+(?:[\.,]\d+)?)', texto_m)
+                    val = float(match_val.group(1).replace(',', '.')) if match_val else 0.0
+                    match_ma = re.search(r'\bma\s+([\w_]+)', texto_m)
+                    ma_val = match_ma.group(1) if match_ma else ""
+                    desc = mensagem
+                    for prefix in ["gastei ", "comprei ", "paguei "]:
+                        if prefix in texto_m:
+                            desc = mensagem[texto_m.find(prefix) + len(prefix):].strip()
+                            break
+                    tool_calls = [{
+                        "function": {
+                            "name": "gerenciar_financas_life_os",
+                            "arguments": {
+                                "acao": "registrar_gasto",
+                                "valor": val,
+                                "descricao": desc,
+                                "ma": ma_val
+                            }
+                        }
+                    }]
+                elif any(p in texto_m for p in ["cabe no meu lazer", "posso comprar", "vale a pena comprar", "pedágio", "pedagio"]) and re.search(r'\b\d+(?:[\.,]\d+)?\b', texto_m):
+                    match_val = re.search(r'(\d+(?:[\.,]\d+)?)', texto_m)
+                    val = float(match_val.group(1).replace(',', '.')) if match_val else 0.0
+                    tool_calls = [{
+                        "function": {
+                            "name": "gerenciar_financas_life_os",
+                            "arguments": {
+                                "acao": "pedagio_compra",
+                                "valor": val,
+                                "item": mensagem
+                            }
+                        }
+                    }]
+
             # Fallback 2.8: Intenção direta de gerenciar janelas e programas abertos no Windows
             if not tool_calls:
                 termos_janela = ["janela", "janelas", "programa aberto", "programas abertos", "aplicativo aberto", "aplicativos abertos"]
