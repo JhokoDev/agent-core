@@ -5,18 +5,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { agentApi } from './api';
 import { Tarefa } from '../types';
 
-// Configuração de notificações locais
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    priority: Notifications.AndroidNotificationPriority.MAX
-  })
-});
-
 const STORAGE_KEYS = {
   LAST_BRIEFING_DATE: '@agent_core_last_briefing_date',
   LAST_CLIPBOARD_HASH: '@agent_core_last_clipboard_hash',
@@ -35,6 +23,16 @@ class DeviceSensorsService {
 
   async init() {
     try {
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowAlert: true,
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+          priority: Notifications.AndroidNotificationPriority.MAX
+        })
+      });
       await Notifications.requestPermissionsAsync();
     } catch {}
 
