@@ -135,7 +135,25 @@ export default function CockpitScreen() {
   }
 
   const tarefasCriticas = dashboard?.tarefas_criticas_hoje || [];
+  const proximasTarefas = dashboard?.proximas_tarefas || [];
   const financas = dashboard?.financas;
+
+  const formatarDataAgenda = (dataIso?: string) => {
+    if (!dataIso) return '';
+    const hoje = new Date();
+    const hojeStr = hoje.toISOString().split('T')[0];
+    const amanha = new Date(hoje);
+    amanha.setDate(amanha.getDate() + 1);
+    const amanhaStr = amanha.toISOString().split('T')[0];
+
+    if (dataIso === hojeStr) return 'Hoje';
+    if (dataIso === amanhaStr) return 'Amanhã';
+    const partes = dataIso.split('-');
+    if (partes.length === 3) {
+      return `${partes[2]}/${partes[1]}`;
+    }
+    return dataIso;
+  };
 
   return (
     <ScrollView
@@ -269,6 +287,80 @@ export default function CockpitScreen() {
                   </TouchableOpacity>
                 )}
 
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnPostpone]}
+                  onPress={() => {
+                    setSelectedTask(tarefa);
+                    setPostponeModalVisible(true);
+                  }}
+                  disabled={actionLoading}
+                >
+                  <Text style={styles.btnPostponeText}>⏳ Adiar</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnComplete]}
+                  onPress={() => {
+                    setSelectedTask(tarefa);
+                    setCompleteModalVisible(true);
+                  }}
+                  disabled={actionLoading}
+                >
+                  <Text style={styles.btnCompleteText}>✓ Concluir</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          );
+        })
+      )}
+
+      {/* Seção Agenda & Próximos Compromissos */}
+      <View style={[styles.sectionHeader, { marginTop: 24 }]}>
+        <Text style={styles.sectionTitle}>📅 AGENDA & PRÓXIMOS COMPROMISSOS</Text>
+        <Text style={styles.sectionBadge}>{proximasTarefas.length}</Text>
+      </View>
+
+      {proximasTarefas.length === 0 ? (
+        <View style={[styles.emptyCard, { paddingVertical: 18 }]}>
+          <Text style={styles.emptySubtitle}>Nenhum compromisso agendado para os próximos dias.</Text>
+        </View>
+      ) : (
+        proximasTarefas.map((tarefa) => {
+          const dataLabel = formatarDataAgenda(tarefa.data_prevista);
+          const isCritica = tarefa.criticidade === 'critica';
+
+          return (
+            <View key={tarefa.id} style={styles.agendaCard}>
+              <View style={styles.taskHeader}>
+                <View style={styles.badgeRow}>
+                  <Text style={styles.agendaDateBadge}>📅 {dataLabel}</Text>
+                  {tarefa.horario_previsto && (
+                    <Text style={styles.timeBadge}>⏰ {tarefa.horario_previsto}</Text>
+                  )}
+                  {tarefa.contexto_execucao && tarefa.contexto_execucao !== 'qualquer' && (
+                    <Text style={styles.contextBadge}>
+                      {tarefa.contexto_execucao === 'rua' ? '📍 Rua' : '💻 PC'}
+                    </Text>
+                  )}
+                </View>
+
+                <Text
+                  style={[
+                    styles.badge,
+                    isCritica ? styles.badgeCritica : styles.badgeImportante
+                  ]}
+                >
+                  {tarefa.criticidade.toUpperCase()}
+                </Text>
+              </View>
+
+              <Text style={styles.taskTitle}>{tarefa.titulo}</Text>
+
+              {tarefa.descricao ? (
+                <Text style={styles.taskDesc}>{tarefa.descricao}</Text>
+              ) : null}
+
+              <View style={styles.actionRow}>
                 <TouchableOpacity
                   style={[styles.btn, styles.btnPostpone]}
                   onPress={() => {
@@ -495,5 +587,31 @@ const styles = StyleSheet.create({
   btnCancel: { backgroundColor: '#262626', paddingHorizontal: 16 },
   btnCancelText: { color: '#94a3b8', fontWeight: '600' },
   btnConfirm: { backgroundColor: '#4f46e5', paddingHorizontal: 16 },
-  btnConfirmText: { color: '#ffffff', fontWeight: '700' }
+  btnConfirmText: { color: '#ffffff', fontWeight: '700' },
+  agendaCard: {
+    backgroundColor: '#0f111c',
+    borderColor: '#2e3860',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14
+  },
+  agendaDateBadge: {
+    backgroundColor: '#312e81',
+    color: '#e0e7ff',
+    fontSize: 11,
+    fontWeight: '700',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6
+  },
+  contextBadge: {
+    backgroundColor: '#1e293b',
+    color: '#94a3b8',
+    fontSize: 10,
+    fontWeight: '600',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6
+  }
 });

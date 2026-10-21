@@ -41,6 +41,7 @@ export interface DashboardStatus {
   tarefas_total_hoje: number;
   tarefas_concluidas_hoje: number;
   tarefas_criticas_hoje: Tarefa[];
+  proximas_tarefas?: Tarefa[];
   financas: DashboardFinancas;
   habitos: Habito[];
 }

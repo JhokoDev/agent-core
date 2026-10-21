@@ -413,9 +413,26 @@ class LifeOSService:
     def obter_resumo_dashboard(self) -> Dict[str, Any]:
         """Compila o estado atual do Life OS para visualização no painel ou via API."""
         hoje = date.today().isoformat()
-        tarefas_hoje = self.db.listar_tarefas(data_prevista=hoje)
-        criticas_hoje = [t for t in tarefas_hoje if t.get("criticidade") == "critica"]
+        todas = self.db.listar_tarefas()
+        tarefas_hoje = [t for t in todas if t.get("data_prevista") == hoje]
+        
+        # Prioridades de hoje: críticas e importantes pendentes
+        criticas_hoje = [
+            t for t in tarefas_hoje 
+            if t.get("criticidade") in ("critica", "importante") and t.get("status") != "concluida"
+        ]
+        # Se não houver críticas/importantes específicas, exibe as pendentes gerais de hoje
+        if not criticas_hoje:
+            criticas_hoje = [t for t in tarefas_hoje if t.get("status") != "concluida"]
+            
         concluidas_hoje = [t for t in tarefas_hoje if t.get("status") == "concluida"]
+
+        # Próximas tarefas na agenda (Amanhã e dias futuros, pendentes)
+        proximas_tarefas = [
+            t for t in todas 
+            if t.get("data_prevista") and t.get("data_prevista") > hoje and t.get("status") != "concluida"
+        ]
+        proximas_tarefas.sort(key=lambda x: (x.get("data_prevista", ""), x.get("horario_previsto", "")))
 
         gastos_hoje = self.db.obter_gastos_hoje()
         teto_diario = float(self.db.obter_config("teto_diario_livre", "50.0"))
@@ -430,6 +447,7 @@ class LifeOSService:
             "tarefas_total_hoje": len(tarefas_hoje),
             "tarefas_concluidas_hoje": len(concluidas_hoje),
             "tarefas_criticas_hoje": criticas_hoje,
+            "proximas_tarefas": proximas_tarefas,
             "financas": {
                 "teto_diario_livre": teto_diario,
                 "gastos_hoje": gastos_hoje,
