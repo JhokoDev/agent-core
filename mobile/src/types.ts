@@ -109,6 +109,7 @@ export interface ChatMessage {
   timestamp: string;
   model?: string;
   route?: string;
+  provedor?: 'nuvem' | 'local' | string;
   isThinking?: boolean;
   reasoning?: string;
   toolCalls?: any[];

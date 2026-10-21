@@ -20,6 +20,7 @@ class ProcessMessageCommand(BaseCommand):
     conteudo: str
     skill_id: str | None = None
     imagem_base64: str | None = None
+    provedor: str | None = None
 
 
 class ExecuteToolCommand(BaseCommand):

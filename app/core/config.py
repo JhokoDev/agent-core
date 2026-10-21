@@ -12,8 +12,13 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     host: Literal["127.0.0.1", "::1"] = "127.0.0.1"
     port: int = Field(default=8000, ge=1024, le=65535)
-    model_provider: Literal["ollama"] = "ollama"
+    model_provider: str = "ollama"
     ollama_url: str = "http://127.0.0.1:11434"
+    
+    # Suporte a Nuvem (Gemini) e Local (Ollama)
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-flash-latest"
+    default_llm_provider: str = "nuvem"
     
     # Modelo Principal
     model: str = Field(default="hf.co/unsloth/gpt-oss-20b-GGUF:Q4_K_M", min_length=1, max_length=160)

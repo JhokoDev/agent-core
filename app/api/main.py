@@ -123,7 +123,8 @@ async def chat(requisicao: ChatRequest):
             chat_id=chat_id,
             conteudo=requisicao.texto,
             skill_id=requisicao.skill_id,
-            imagem_base64=requisicao.imagem_base64
+            imagem_base64=requisicao.imagem_base64,
+            provedor=requisicao.provedor
         )
         await event_bus.publish(comando)
         return StreamingResponse(

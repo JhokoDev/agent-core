@@ -22,3 +22,4 @@ class ChatRequest(BaseModel):
     tool_id: Optional[str] = None
     chat_id: Optional[str] = None
     imagem_base64: Optional[str] = None
+    provedor: Optional[str] = None  # "nuvem" | "local" | "gemini" | "ollama"

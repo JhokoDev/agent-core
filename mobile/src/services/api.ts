@@ -50,6 +50,22 @@ function computeDefaultBaseUrl(): string {
 
 let API_BASE_URL = computeDefaultBaseUrl();
 let API_TOKEN = 'minhasenha_super_segura_de_32_caracteres_minimo_aqui';
+let CURRENT_LLM_PROVIDER: 'nuvem' | 'local' = 'nuvem';
+
+AsyncStorage.getItem('@agent_core_llm_provider').then((saved) => {
+  if (saved === 'nuvem' || saved === 'local') {
+    CURRENT_LLM_PROVIDER = saved;
+  }
+});
+
+export async function setLlmProvider(provider: 'nuvem' | 'local') {
+  CURRENT_LLM_PROVIDER = provider;
+  await AsyncStorage.setItem('@agent_core_llm_provider', provider);
+}
+
+export function getLlmProvider(): 'nuvem' | 'local' {
+  return CURRENT_LLM_PROVIDER;
+}
 
 // Carrega preferências salvas no dispositivo e limpa entradas antigas com 127.0.0.1
 AsyncStorage.getItem('@agent_core_server_url').then((savedUrl) => {
@@ -308,8 +324,9 @@ export const agentApi = {
   async enviarMensagem(
     texto: string,
     chatId?: string,
-    onChunk?: (tokenText: string) => void
-  ): Promise<{ content: string; chatId: string; model?: string; route?: string; reasoning?: string }> {
+    onChunk?: (tokenText: string) => void,
+    provedor?: 'nuvem' | 'local'
+  ): Promise<{ content: string; chatId: string; model?: string; route?: string; reasoning?: string; provedor?: string }> {
     return new Promise((resolve, reject) => {
       const base = getApiBaseUrl();
       const xhr = new XMLHttpRequest();
@@ -351,7 +368,8 @@ export const agentApi = {
               responseMetadata = {
                 model: data.model,
                 route: data.route,
-                reasoning: data.reasoning
+                reasoning: data.reasoning,
+                provedor: data.provedor
               };
             }
           } catch {
@@ -406,7 +424,9 @@ export const agentApi = {
       xhr.send(
         JSON.stringify({
           texto,
-          chat_id: chatId
+          chat_id: chatId,
+          skill_id: 'default',
+          provedor: provedor || CURRENT_LLM_PROVIDER
         })
       );
     });

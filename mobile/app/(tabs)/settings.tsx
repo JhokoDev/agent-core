@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -9,7 +9,14 @@ import {
   Switch,
   Alert
 } from 'react-native';
-import { setApiConfig, getApiBaseUrl, getBundlerHost, agentApi } from '../../src/services/api';
+import {
+  setApiConfig,
+  getApiBaseUrl,
+  getBundlerHost,
+  agentApi,
+  getLlmProvider,
+  setLlmProvider
+} from '../../src/services/api';
 
 export default function SettingsScreen() {
   const detectedHost = getBundlerHost();
@@ -21,9 +28,25 @@ export default function SettingsScreen() {
     return current;
   });
   const [token, setToken] = useState('minhasenha_super_segura_de_32_caracteres_minimo_aqui');
+  const [llmProvider, setLlmProviderState] = useState<'nuvem' | 'local'>('nuvem');
   const [modoImprevisto, setModoImprevisto] = useState(false);
   const [motivoImprevisto, setMotivoImprevisto] = useState('');
   const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    setLlmProviderState(getLlmProvider());
+  }, []);
+
+  const handleTrocarMotor = async (novo: 'nuvem' | 'local') => {
+    setLlmProviderState(novo);
+    await setLlmProvider(novo);
+    Alert.alert(
+      'Motor IA Atualizado',
+      novo === 'nuvem'
+        ? 'Motor alterado para Nuvem (Google Gemini Flash - Rápido & Zero Custo).'
+        : 'Motor alterado para Local (Ollama / Llama 3.2 - 100% Offline).'
+    );
+  };
 
   const handleUsarIpDetectado = () => {
     const defaultUrl = `http://${detectedHost}:8000`;
@@ -76,6 +99,55 @@ export default function SettingsScreen() {
       <View style={styles.header}>
         <Text style={styles.eyebrow}>CENTRAL & CONECTIVIDADE</Text>
         <Text style={styles.title}>Ajustes do Agente</Text>
+      </View>
+
+      {/* Seletor de Motor IA Padrão */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Motor de Inteligência Artificial</Text>
+        <Text style={styles.cardSubtitle}>
+          Escolha o motor principal para responder no chat e organizar sua vida:
+        </Text>
+
+        <TouchableOpacity
+          style={[
+            styles.providerOptionCard,
+            llmProvider === 'nuvem' && styles.providerOptionCardActiveNuvem
+          ]}
+          onPress={() => handleTrocarMotor('nuvem')}
+        >
+          <Text style={styles.providerOptionEmoji}>☁️</Text>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.providerOptionTitle}>Nuvem (Gemini Flash)</Text>
+              <Text style={styles.tagZeroCusto}>GRÁTIS</Text>
+            </View>
+            <Text style={styles.providerOptionDesc}>
+              Zero custo · Resposta instantânea (1-2s) · Interpretação e horários avançados
+            </Text>
+          </View>
+          {llmProvider === 'nuvem' && <Text style={styles.checkMark}>✓</Text>}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.providerOptionCard,
+            llmProvider === 'local' && styles.providerOptionCardActiveLocal,
+            { marginTop: 10 }
+          ]}
+          onPress={() => handleTrocarMotor('local')}
+        >
+          <Text style={styles.providerOptionEmoji}>💻</Text>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.providerOptionTitle}>Local (Ollama / Llama 3.2)</Text>
+              <Text style={styles.tagLocal}>OFFLINE</Text>
+            </View>
+            <Text style={styles.providerOptionDesc}>
+              100% no seu PC · Privacidade total · Funciona sem nenhuma conexão à internet
+            </Text>
+          </View>
+          {llmProvider === 'local' && <Text style={styles.checkMark}>✓</Text>}
+        </TouchableOpacity>
       </View>
 
       {/* Configuração de Conexão com PC (Tailscale) */}
@@ -170,7 +242,7 @@ export default function SettingsScreen() {
       <View style={[styles.card, { marginBottom: 30 }]}>
         <Text style={styles.cardTitle}>Agent Core Life OS</Text>
         <Text style={styles.systemInfo}>Versão do App: 1.0.0 (Expo Mobile)</Text>
-        <Text style={styles.systemInfo}>Integrações: Windows Win32 · Chrome WebSocket · Whisper · Ollama</Text>
+        <Text style={styles.systemInfo}>Motores de IA: Google Gemini 1.5/2.x Flash (Nuvem) · Ollama Llama 3.2 (Local)</Text>
         <Text style={styles.systemInfo}>Repositório: github.com/JhokoDev/agent-core</Text>
       </View>
     </ScrollView>
@@ -192,7 +264,47 @@ const styles = StyleSheet.create({
     marginBottom: 16
   },
   cardTitle: { color: '#f8fafc', fontSize: 16, fontWeight: '700' },
-  cardSubtitle: { color: '#64748b', fontSize: 13, marginTop: 4, marginBottom: 12 },
+  cardSubtitle: { color: '#64748b', fontSize: 13, marginTop: 4, marginBottom: 14 },
+  providerOptionCard: {
+    backgroundColor: '#0c0e17',
+    borderColor: '#1e243d',
+    borderWidth: 1.5,
+    borderRadius: 12,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12
+  },
+  providerOptionCardActiveNuvem: {
+    borderColor: '#3b82f6',
+    backgroundColor: '#0f172a'
+  },
+  providerOptionCardActiveLocal: {
+    borderColor: '#6366f1',
+    backgroundColor: '#18182e'
+  },
+  providerOptionEmoji: { fontSize: 22 },
+  providerOptionTitle: { color: '#f8fafc', fontSize: 14, fontWeight: '700' },
+  tagZeroCusto: {
+    backgroundColor: '#064e3b',
+    color: '#6ee7b7',
+    fontSize: 9,
+    fontWeight: '800',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4
+  },
+  tagLocal: {
+    backgroundColor: '#312e81',
+    color: '#c7d2fe',
+    fontSize: 9,
+    fontWeight: '800',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4
+  },
+  providerOptionDesc: { color: '#94a3b8', fontSize: 11, marginTop: 2, lineHeight: 15 },
+  checkMark: { color: '#3b82f6', fontSize: 18, fontWeight: '900', marginLeft: 4 },
   inputLabel: { color: '#94a3b8', fontSize: 10, fontWeight: '800', letterSpacing: 1, marginBottom: 6 },
   input: {
     backgroundColor: '#0c0e17',

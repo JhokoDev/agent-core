@@ -54,6 +54,7 @@ class EventGateway:
                         "router_metadata": event.router_metadata,
                         "plan": event.plan,
                         "reasoning": event.reasoning,
+                        "provedor": getattr(event, "provedor", None),
                     }
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 

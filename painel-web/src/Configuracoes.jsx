@@ -85,6 +85,14 @@ export default function Configuracoes() {
             <div className="cfg-header"><Brain size={20} /> Motor Lógico (LLM)</div>
             
             <div className="form-group">
+              <label className="form-label">Motor de Inteligência Artificial</label>
+              <select name="provedor_llm" className="form-select" value={config.provedor_llm || 'nuvem'} onChange={handleChange}>
+                <option value="nuvem">☁️ Nuvem (Google Gemini Flash - Zero Custo & Rápido)</option>
+                <option value="local">💻 Local (Ollama / Llama 3.2 - 100% Offline)</option>
+              </select>
+            </div>
+
+            <div className="form-group">
               <label className="form-label">Modelo Ativo (Local)</label>
               <select name="modelo_ativo" className="form-select" value={config.modelo_ativo} onChange={handleChange}>
                 {modelos.length === 0 && <option value={config.modelo_ativo}>{config.modelo_ativo}</option>}

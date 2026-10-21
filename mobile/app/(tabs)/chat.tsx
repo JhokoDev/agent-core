@@ -11,7 +11,7 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { agentApi } from '../../src/services/api';
+import { agentApi, getLlmProvider, setLlmProvider } from '../../src/services/api';
 import { ChatMessage } from '../../src/types';
 
 function sanitizeMessageText(text: string): string {
@@ -44,19 +44,29 @@ export default function ChatScreen() {
     {
       id: 'welcome',
       role: 'assistant',
-      content: 'Olá! Sou o Agent Core. Diga uma tarefa para organizar, um gasto do dia ou peça para eu abrir programas no seu computador.',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      content: 'Olá! Sou o Agent Core. Diga uma tarefa para agendar, registre seus gastos ou faça perguntas do dia a dia.',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      provedor: 'nuvem'
     }
   ]);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
-  const [recording, setRecording] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+  const [provedor, setProvedor] = useState<'nuvem' | 'local'>('nuvem');
   const flatListRef = useRef<FlatList>(null);
+
+  useEffect(() => {
+    setProvedor(getLlmProvider());
+  }, []);
 
   useEffect(() => {
     flatListRef.current?.scrollToEnd({ animated: true });
   }, [messages]);
+
+  const handleToggleProvedor = (novo: 'nuvem' | 'local') => {
+    setProvedor(novo);
+    setLlmProvider(novo);
+  };
 
   const handleSend = async (textoParaEnviar?: string) => {
     const texto = (textoParaEnviar || inputText).trim();
@@ -69,7 +79,7 @@ export default function ChatScreen() {
     const newMessages: ChatMessage[] = [
       ...messages,
       { id: userMsgId, role: 'user', content: texto, timestamp: timeStr },
-      { id: assistantMsgId, role: 'assistant', content: '', timestamp: timeStr }
+      { id: assistantMsgId, role: 'assistant', content: '', timestamp: timeStr, provedor }
     ];
 
     setMessages(newMessages);
@@ -85,10 +95,11 @@ export default function ChatScreen() {
           accumulated += token;
           setMessages((prev) =>
             prev.map((msg) =>
-              msg.id === assistantMsgId ? { ...msg, content: accumulated } : msg
+              msg.id === assistantMsgId ? { ...msg, content: accumulated, provedor } : msg
             )
           );
-        }
+        },
+        provedor
       );
 
       if (response?.chatId) {
@@ -103,7 +114,8 @@ export default function ChatScreen() {
                 content: response.content || accumulated,
                 model: response.model,
                 route: response.route,
-                reasoning: response.reasoning
+                reasoning: response.reasoning,
+                provedor: (response.provedor as any) || provedor
               }
             : msg
         )
@@ -138,11 +150,37 @@ export default function ChatScreen() {
             isUser ? styles.userBubble : styles.agentBubble
           ]}
         >
-          {item.route && (
-            <View style={styles.routeBadge}>
-              <Text style={styles.routeBadgeText}>
-                {item.route} {item.model ? `· ${item.model}` : ''}
-              </Text>
+          {!isUser && (
+            <View style={styles.badgeRow}>
+              {item.provedor && (
+                <View
+                  style={[
+                    styles.providerBadge,
+                    item.provedor === 'nuvem'
+                      ? styles.providerBadgeNuvem
+                      : styles.providerBadgeLocal
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.providerBadgeText,
+                      item.provedor === 'nuvem'
+                        ? styles.providerBadgeTextNuvem
+                        : styles.providerBadgeTextLocal
+                    ]}
+                  >
+                    {item.provedor === 'nuvem' ? '☁️ Nuvem (Gemini)' : '💻 Local (Ollama)'}
+                  </Text>
+                </View>
+              )}
+
+              {item.route && (
+                <View style={styles.routeBadge}>
+                  <Text style={styles.routeBadgeText}>
+                    {item.route} {item.model ? `· ${item.model}` : ''}
+                  </Text>
+                </View>
+              )}
             </View>
           )}
 
@@ -162,6 +200,46 @@ export default function ChatScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
+        {/* Barra Superior Seletora de Motor IA (Nuvem / Local) */}
+        <View style={styles.providerContainer}>
+          <Text style={styles.providerHeaderLabel}>MOTOR DE IA:</Text>
+          <View style={styles.toggleRow}>
+            <TouchableOpacity
+              style={[
+                styles.toggleBtn,
+                provedor === 'nuvem' && styles.toggleBtnActiveNuvem
+              ]}
+              onPress={() => handleToggleProvedor('nuvem')}
+            >
+              <Text
+                style={[
+                  styles.toggleBtnText,
+                  provedor === 'nuvem' && styles.toggleBtnTextActive
+                ]}
+              >
+                ☁️ Nuvem (Gemini)
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.toggleBtn,
+                provedor === 'local' && styles.toggleBtnActiveLocal
+              ]}
+              onPress={() => handleToggleProvedor('local')}
+            >
+              <Text
+                style={[
+                  styles.toggleBtnText,
+                  provedor === 'local' && styles.toggleBtnTextActive
+                ]}
+              >
+                💻 Local (Ollama)
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
         <FlatList
           ref={flatListRef}
           data={messages}
@@ -203,11 +281,54 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#090a0f' },
   keyboardContainer: { flex: 1 },
   listContent: { padding: 16, paddingBottom: 20 },
+  providerContainer: {
+    backgroundColor: '#0f111c',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e243d',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
+  providerHeaderLabel: {
+    color: '#94a3b8',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#161926',
+    borderRadius: 10,
+    padding: 3,
+    gap: 4
+  },
+  toggleBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8
+  },
+  toggleBtnActiveNuvem: {
+    backgroundColor: '#2563eb'
+  },
+  toggleBtnActiveLocal: {
+    backgroundColor: '#4f46e5'
+  },
+  toggleBtnText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  toggleBtnTextActive: {
+    color: '#ffffff',
+    fontWeight: '800'
+  },
   msgBubbleContainer: { marginBottom: 12, flexDirection: 'row' },
   userBubbleContainer: { justifyContent: 'flex-end' },
   agentBubbleContainer: { justifyContent: 'flex-start' },
   msgBubble: {
-    maxWidth: '82%',
+    maxWidth: '85%',
     padding: 14,
     borderRadius: 18
   },
@@ -220,6 +341,50 @@ const styles = StyleSheet.create({
     borderColor: '#262c45',
     borderWidth: 1,
     borderBottomLeftRadius: 4
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8
+  },
+  providerBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1
+  },
+  providerBadgeNuvem: {
+    backgroundColor: 'rgba(37, 99, 235, 0.15)',
+    borderColor: 'rgba(37, 99, 235, 0.35)'
+  },
+  providerBadgeLocal: {
+    backgroundColor: 'rgba(79, 70, 229, 0.15)',
+    borderColor: 'rgba(79, 70, 229, 0.35)'
+  },
+  providerBadgeText: {
+    fontSize: 9,
+    fontWeight: '700'
+  },
+  providerBadgeTextNuvem: {
+    color: '#60a5fa'
+  },
+  providerBadgeTextLocal: {
+    color: '#a5b4fc'
+  },
+  routeBadge: {
+    backgroundColor: 'rgba(100, 116, 139, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(100, 116, 139, 0.3)'
+  },
+  routeBadgeText: {
+    color: '#94a3b8',
+    fontSize: 9,
+    fontWeight: '700'
   },
   msgText: { fontSize: 15, lineHeight: 21 },
   userText: { color: '#f8fafc' },
@@ -261,20 +426,5 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   disabledBtn: { backgroundColor: '#312e81', opacity: 0.7 },
-  sendIcon: { color: '#ffffff', fontSize: 18, marginLeft: 2 },
-  routeBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(59, 130, 246, 0.15)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginBottom: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.3)'
-  },
-  routeBadgeText: {
-    color: '#60a5fa',
-    fontSize: 10,
-    fontWeight: '700'
-  }
+  sendIcon: { color: '#ffffff', fontSize: 18, marginLeft: 2 }
 });

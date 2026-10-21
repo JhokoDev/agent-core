@@ -63,6 +63,7 @@ class AgentMessageEvent(BaseEvent):
     router_metadata: dict | None = None
     plan: dict | None = None
     reasoning: str | None = None
+    provedor: str | None = None
 
 
 class AgentDoneEvent(BaseEvent):

@@ -1,9 +1,16 @@
 from app.core.config import Settings
 from app.models.base import ModelProvider
 from app.models.ollama import OllamaProvider
+from app.models.gemini import GeminiProvider
 
 
-def create_provider(settings: Settings) -> ModelProvider:
-    # Seleção por backend; nenhuma decisão por nome/família do modelo.
-    factories = {"ollama": OllamaProvider}
-    return factories[settings.model_provider](settings)
+def create_provider(settings: Settings, provider_name: str | None = None) -> ModelProvider:
+    factories = {
+        "ollama": OllamaProvider,
+        "local": OllamaProvider,
+        "gemini": GeminiProvider,
+        "nuvem": GeminiProvider
+    }
+    p = (provider_name or settings.model_provider or "ollama").strip().lower()
+    factory = factories.get(p, OllamaProvider)
+    return factory(settings)

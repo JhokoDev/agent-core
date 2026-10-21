@@ -36,7 +36,10 @@ class OrchestratorService:
         self.planner = Planner()
         
         self.settings = Settings()
-        self.model_provider = create_provider(self.settings)
+        self.ollama_provider = create_provider(self.settings, provider_name="ollama")
+        self.gemini_provider = create_provider(self.settings, provider_name="gemini")
+        default_prov = (os.getenv("DEFAULT_LLM_PROVIDER") or getattr(self.settings, "default_llm_provider", "nuvem")).lower()
+        self.model_provider = self.gemini_provider if default_prov in ("nuvem", "gemini") else self.ollama_provider
 
         self.modelo_padrao = getattr(self.settings, "model_padrao", None) or os.getenv("AGENT_MODEL_PADRAO", "hf.co/unsloth/gpt-oss-20b-GGUF:Q4_K_M")
         self.mapa_modelos = {
@@ -247,7 +250,18 @@ class OrchestratorService:
             tool_calls = []
 
             # Notifica a linha de raciocínio da rota escolhida
-            info_rota = f"[Roteador: rota '{rota.rota}' ({rota.modelo}) - {rota.motivo}]\n"
+            # Seleção dinâmica de provedor (Nuvem vs Local)
+            prov_solicitado = (command.provedor or os.getenv("DEFAULT_LLM_PROVIDER", "nuvem")).strip().lower()
+            if prov_solicitado in ("nuvem", "gemini"):
+                provedor_atual = self.gemini_provider
+                nome_motor = "Nuvem (Gemini Flash)"
+                modelo_exibicao = "gemini-flash-latest"
+            else:
+                provedor_atual = self.ollama_provider
+                nome_motor = "Local (Ollama)"
+                modelo_exibicao = rota.modelo
+
+            info_rota = f"[Motor: {nome_motor} | Rota: '{rota.rota}' ({modelo_exibicao}) - {rota.motivo}]\n"
             conteudo_thinking += info_rota
             await event_bus.publish(AgentChunkEvent(chat_id=chat_id, thinking=info_rota))
             if plano_serializado and len(plano_serializado.get('etapas', [])) > 0:
@@ -258,16 +272,33 @@ class OrchestratorService:
             # ==========================================
             # 1ª CHAMADA COM CASCATA (Streaming Inicial)
             # ==========================================
-            async for chunk in self.model_provider.chat_stream(messages=mensagens_pydantic, tools=ferramentas or None):
-                if chunk["tipo"] == "thinking":
-                    conteudo_thinking += chunk["conteudo"]
-                    await event_bus.publish(AgentChunkEvent(chat_id=chat_id, thinking=chunk["conteudo"]))
-                elif chunk["tipo"] == "texto":
-                    conteudo_texto += chunk["conteudo"]
-                    # Emite o chunk imediatamente para o EventBus (A MÁGICA DO STREAMING!)
-                    await event_bus.publish(AgentChunkEvent(chat_id=chat_id, content=chunk["conteudo"]))
-                elif chunk["tipo"] == "tools":
-                    tool_calls = chunk["conteudo"]
+            try:
+                async for chunk in provedor_atual.chat_stream(messages=mensagens_pydantic, tools=ferramentas or None):
+                    if chunk["tipo"] == "thinking":
+                        conteudo_thinking += chunk["conteudo"]
+                        await event_bus.publish(AgentChunkEvent(chat_id=chat_id, thinking=chunk["conteudo"]))
+                    elif chunk["tipo"] == "texto":
+                        conteudo_texto += chunk["conteudo"]
+                        await event_bus.publish(AgentChunkEvent(chat_id=chat_id, content=chunk["conteudo"]))
+                    elif chunk["tipo"] == "tools":
+                        tool_calls = chunk["conteudo"]
+            except Exception as e_prov:
+                if provedor_atual != self.ollama_provider:
+                    print(f"[Orchestrator] Nuvem falhou ({e_prov}). Alternando para Local (Ollama)...")
+                    aviso_fb = f"[Aviso: Nuvem indisponível ({e_prov}). Alternando automaticamente para modelo local...]\n"
+                    await event_bus.publish(AgentChunkEvent(chat_id=chat_id, thinking=aviso_fb))
+                    provedor_atual = self.ollama_provider
+                    async for chunk in provedor_atual.chat_stream(messages=mensagens_pydantic, tools=ferramentas or None):
+                        if chunk["tipo"] == "thinking":
+                            conteudo_thinking += chunk["conteudo"]
+                            await event_bus.publish(AgentChunkEvent(chat_id=chat_id, thinking=chunk["conteudo"]))
+                        elif chunk["tipo"] == "texto":
+                            conteudo_texto += chunk["conteudo"]
+                            await event_bus.publish(AgentChunkEvent(chat_id=chat_id, content=chunk["conteudo"]))
+                        elif chunk["tipo"] == "tools":
+                            tool_calls = chunk["conteudo"]
+                else:
+                    raise e_prov
 
             print(f"[Orchestrator DEBUG] Mensagem: '{mensagem}' | tool_calls da IA: {tool_calls}")
 
@@ -688,7 +719,7 @@ class OrchestratorService:
 
                     mensagens_pydantic = [Message(**m) for m in mensagens_modelo]
                     conteudo_final = ""
-                    async for chunk in self.model_provider.chat_stream(messages=mensagens_pydantic, tools=ferramentas or None):
+                    async for chunk in provedor_atual.chat_stream(messages=mensagens_pydantic, tools=ferramentas or None):
                         if chunk["tipo"] == "thinking":
                             conteudo_thinking += chunk["conteudo"]
                             await event_bus.publish(AgentChunkEvent(chat_id=chat_id, thinking=chunk["conteudo"]))
@@ -714,7 +745,8 @@ class OrchestratorService:
             mensagem_assistente_final = {
                 "role": "assistant",
                 "content": conteudo_final,
-                "model": rota.modelo,
+                "model": modelo_exibicao,
+                "provedor": "nuvem" if provedor_atual == self.gemini_provider else "local",
                 "skill": skill_id,
                 "route": rota.rota,
                 "confidence": rota.confianca,
@@ -733,8 +765,9 @@ class OrchestratorService:
             evento_msg = AgentMessageEvent(
                 chat_id=chat_id,
                 content=conteudo_final,
-                model=rota.modelo,
+                model=modelo_exibicao,
                 route=rota.rota,
+                provedor="nuvem" if provedor_atual == self.gemini_provider else "local",
                 skill=skill_id,
                 confidence=rota.confianca,
                 reason=rota.motivo,
