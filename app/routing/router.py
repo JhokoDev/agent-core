@@ -160,9 +160,30 @@ class Router:
     def _parece_interacao_maquina(self, texto: str) -> bool:
         """
         Identifica se a mensagem solicita controle do computador,
-        sistema operacional, navegador, multimídia ou ferramentas do hub.
+        sistema operacional, navegador, multimídia, tarefas, finanças ou lembretes do Life OS.
         """
+        import re
+
+        # Detecção de padrão temporal ou horário (ex: 6:40, 18:00, 14h, 5 min, 10 minutos)
+        if re.search(r'\b(\d{1,2}(:\d{2}|h(\d{2})?))\b|\b\d+\s*min(uto)?s?\b', texto):
+            return True
+
         indicadores = (
+            # Lembretes, Tarefas, Compromissos e Life OS (Motion & Alarmy style)
+            "lembre", "lembrete", "lembretes", "lembrar", "me lembre", "me avise", "avise", "avisar", "alerta", "alertar",
+            "tarefa", "tarefas", "compromisso", "compromissos", "agendar", "agende", "agenda", "calendário", "calendario",
+            "tenho que", "preciso", "não posso esquecer", "nao posso esquecer", "devo", "fazer",
+            "levar", "buscar", "comprar", "entregar", "pagar", "acordar", "sair", "sair de casa",
+            "reunião", "reuniao", "consulta", "evento", "encomenda", "prazo",
+            # Expressões Temporais
+            "amanhã", "amanha", "hoje", "ontem", "segunda", "terça", "terca", "quarta", "quinta", "sexta", "sábado", "sabado", "domingo",
+            "às", "as ", "horas", "horário", "horario", "minutos antes", "minuto antes", "horas antes", "hora antes",
+            "daqui a", "quando der", "pela manhã", "pela manha", "à tarde", "a tarde", "à noite", "a noite",
+            "cedo", "dia de hoje", "data de hoje", "que horas", "hora atual",
+            # Finanças e Decisões de Compra (Cleo style)
+            "gastei", "comprei", "paguei", "ganhei", "receita", "receitas", "despesa", "despesas", "gasto", "gastos",
+            "saldo", "caixa", "caixas", "reserva", "dinheiro", "espécie", "especie", "pedágio", "pedagio",
+            "posso gastar", "quanto tenho", "guardado", "na caixinha", "em conta", "quanto posso",
             # Ações diretas no SO e janelas
             "abra", "abrir", "inicie", "iniciar", "execute", "executar", "rode", "rodar",
             "feche", "fechar", "encerre", "encerrar", "mate", "matar",

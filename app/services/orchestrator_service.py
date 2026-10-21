@@ -158,7 +158,7 @@ class OrchestratorService:
                     "- Para notas e metas de conversa, chame 'gerenciar_notas' e 'gerenciar_objetivo'.\n"
                     "- Para hora atual e capacidades, chame 'obter_hora_atual' e 'obter_capacidades'.\n"
                     "- Para cálculos matemáticos, chame 'calcular'.\n"
-                    "- Para tarefas, compromissos diários e insistência Life OS, chame 'gerenciar_life_os' (acao='criar_tarefa', 'listar_tarefas', 'adiar_tarefa', 'concluir_tarefa').\n"
+                    "- Para tarefas, lembretes, compromissos e alarmes com data/hora (ex: 'me lembre de levar encomenda amanhã às 6:40', 'lembrar 5 min antes'), chame 'gerenciar_life_os' (acao='criar_tarefa', titulo=..., horario='06:35' ou '06:40', data_prevista='amanha', antecedencia_minutos=5, criticidade='critica' ou 'importante'). NUNCA recuse ou diga que não pode lembrar de horários!\n"
                     "- Para finanças, registro de gastos/ganhos, consultar as 4 caixas e calcular pedágio anti-impulso, chame 'gerenciar_financas_life_os' (acao='registrar_gasto', 'registrar_receita', 'consultar_saldo', 'pedagio_compra').\n"
                 )
             else:
@@ -197,7 +197,11 @@ class OrchestratorService:
                     f"   - POSSE OU RECEBIMENTO: Se o usuário falar sobre dinheiro que TEM, RECEBEU, GUARDOU ou ESTÁ EM CAIXA (ex: 'tenho 200 reais em caixa', 'estou com 300 na caixinha', 'guardado no banco', 'em dinheiro/espécie'), use acao='registrar_receita' (categoria='apenas_recebimento' ou 'construcao_futuro'). NUNCA chame 'registrar_gasto' para dinheiro que o usuário possui ou tem em caixa!\n"
                     f"   - PLANEJAMENTO FUTURO: Se ele disser que tem dinheiro 'para gastar em um evento dia 25', isso é um orçamento futuro, e NÃO uma despesa realizada hoje. Registre o valor disponível como receita/caixa ou adicione um lembrete no Life OS, mas NUNCA debite como gasto de hoje.\n"
                     f"   - GASTO REALIZADO: Use acao='registrar_gasto' EXCLUSIVAMENTE quando o usuário afirmar que já gastou, comprou ou pagou algo (ex: 'gastei 50', 'comprei almoço', 'paguei conta').\n"
-                    f"2. Se o usuário falar sobre compromissos ou tarefas a fazer, use 'gerenciar_life_os' para registrar com data/horário e sugira um micro-passo de 2 minutos para iniciar.\n"
+                    f"2. COMPROMISSOS, TAREFAS E LEMBRETES (Motion & Alarmy style): Sempre que o usuário mencionar algo que precisa fazer, levar, buscar, acordar ou ser lembrado com data ou horário (ex: 'Amanhã levar encomenda ao IFTO às 6:40, me lembre 5 min antes'):\n"
+                    f"   - Calcule o horário exato do alerta subtraindo a antecedência pedida (ex: 6:40 - 5 min = 06:35).\n"
+                    f"   - Chame 'gerenciar_life_os' com acao='criar_tarefa', titulo=..., horario='06:35', data_prevista='amanha', antecedencia_minutos=5, criticidade='importante' ou 'critica'.\n"
+                    f"   - Confirme ativamente ao usuário o agendamento do lembrete, data e horário exato do disparo (06:35) e sugira um micro-passo de 2 minutos para iniciar.\n"
+                    f"   - NUNCA recuse ou diga que não pode lembrar de datas ou horários futuros!\n"
                     f"3. Dê conselhos reais e personalizados, nunca apenas respostas genéricas."
                 )
             except Exception as e:

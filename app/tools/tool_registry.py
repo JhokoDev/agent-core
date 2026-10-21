@@ -738,6 +738,16 @@ def criar_registry_padrao() -> ToolRegistry:
                     "obrigatorio": False,
                     "descricao": "Horário previsto no formato HH:MM (ex: '17:00')."
                 },
+                "data_prevista": {
+                    "tipo": "string",
+                    "obrigatorio": False,
+                    "descricao": "Data da tarefa: YYYY-MM-DD ou 'amanha', 'hoje'."
+                },
+                "antecedencia_minutos": {
+                    "tipo": "number",
+                    "obrigatorio": False,
+                    "descricao": "Minutos de antecedência para disparar o lembrete antes do evento (ex: 5 para lembrar 5 min antes)."
+                },
                 "criticidade": {
                     "tipo": "string",
                     "obrigatorio": False,

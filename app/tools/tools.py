@@ -968,30 +968,98 @@ class FerramentaGerenciarLifeOS(FerramentaBase):
     """Permite ao assistente criar, listar, adiar e concluir tarefas diárias no Life OS diretamente pelo chat."""
     def executar(self, argumentos: dict) -> str:
         from app.services.life_os import life_os_service
+        from datetime import date, datetime, timedelta
+        import re
+
         acao = str(argumentos.get("acao", "criar_tarefa")).lower().strip()
         titulo = str(argumentos.get("titulo", "")).strip()
         horario = str(argumentos.get("horario", "")).strip()
+        data_prevista = str(argumentos.get("data_prevista", "")).strip()
+        antecedencia = argumentos.get("antecedencia_minutos") or argumentos.get("minutos_antes")
         criticidade = str(argumentos.get("criticidade", "rotina")).lower().strip()
         motivo = str(argumentos.get("motivo", "")).strip()
         tarefa_id = argumentos.get("tarefa_id")
         prova = str(argumentos.get("prova", "")).strip()
 
         try:
-            if acao in ("criar_tarefa", "agendar"):
+            if acao in ("criar_tarefa", "agendar", "lembrete", "lembrar"):
                 if not titulo:
                     return "Erro: Título da tarefa é obrigatório para agendamento."
+
+                # 1. Resolução inteligente de data (Motion-Style)
+                hoje = date.today()
+                texto_analise = f"{titulo} {data_prevista}".lower()
+                data_final = hoje.isoformat()
+
+                if any(p in texto_analise for p in ["amanhã", "amanha", "tomorrow"]):
+                    data_final = (hoje + timedelta(days=1)).isoformat()
+                elif re.match(r'^\d{4}-\d{2}-\d{2}$', data_prevista):
+                    data_final = data_prevista
+
+                # 2. Resolução inteligente de horário e offset de antecedência (Motion-Style)
+                horario_final = None
+                
+                # Se não veio horário explícito, tenta extrair do título ou texto (ex: 6:40 ou 06:40)
+                if not horario:
+                    match_hora = re.search(r'\b(\d{1,2}):(\d{2})\b', titulo)
+                    if match_hora:
+                        h, m = int(match_hora.group(1)), int(match_hora.group(2))
+                        horario = f"{h:02d}:{m:02d}"
+
+                if horario:
+                    match_h = re.search(r'(\d{1,2}):(\d{2})', horario)
+                    if match_h:
+                        h, m = int(match_h.group(1)), int(match_h.group(2))
+                        
+                        # Se não foi passado antecedência explícita, procura no título (ex: "5 minutos antes")
+                        if antecedencia is None:
+                            match_ant = re.search(r'(\d+)\s*minutos?\s*antes', titulo.lower())
+                            if match_ant:
+                                antecedencia = int(match_ant.group(1))
+
+                        # Aplica o offset (Horário do evento - minutos de antecedência)
+                        if antecedencia and int(antecedencia) > 0:
+                            total_min = h * 60 + m - int(antecedencia)
+                            if total_min < 0:
+                                total_min += 24 * 60
+                            h_alerta = total_min // 60
+                            m_alerta = total_min % 60
+                            horario_final = f"{h_alerta:02d}:{m_alerta:02d}"
+                        else:
+                            horario_final = f"{h:02d}:{m:02d}"
+                    else:
+                        horario_final = horario
+
+                # 3. Contexto de Execução e Criticidade automática
+                contexto = "qualquer"
+                if any(k in titulo.lower() for k in ["sair", "levar", "buscar", "mercado", "rua", "ifto", "faculdade", "encomenda"]):
+                    contexto = "rua"
+                    if criticidade == "rotina":
+                        criticidade = "importante"
+
+                if horario_final and criticidade == "rotina":
+                    criticidade = "importante"
+
                 dados = {
                     "titulo": titulo,
-                    "criticidade": criticidade if criticidade in ("rotina", "importante", "critica") else "rotina",
-                    "horario_previsto": horario or None
+                    "criticidade": criticidade if criticidade in ("rotina", "importante", "critica") else "importante",
+                    "data_prevista": data_final,
+                    "horario_previsto": horario_final,
+                    "contexto_execucao": contexto
                 }
+
                 res = life_os_service.criar_tarefa(dados)
-                micro = res.get("micro_step_sugerido") or "Dê o primeiro passo de 2 minutos."
+                micro = res.get("micro_step_sugerido") or "Deixe tudo preparado com antecedência."
                 crit_label = res.get("criticidade", "rotina").upper()
-                horario_label = res.get("horario_previsto") or "hoje"
+                horario_label = res.get("horario_previsto") or "dia todo"
+                data_label = "amanhã" if data_final == (hoje + timedelta(days=1)).isoformat() else ("hoje" if data_final == hoje.isoformat() else data_final)
+
+                offset_info = f" (alerta antecipado calculado: {horario_final})" if antecedencia else ""
+
                 return (
-                    f"Sucesso: Tarefa '{titulo}' agendada para {horario_label} (Nível: {crit_label})! "
-                    f"Micro-passo de 2 minutos sugerido: {micro}"
+                    f"Sucesso: Lembrete/Tarefa '{titulo}' agendado com sucesso para {data_label} às {horario_label}{offset_info}! "
+                    f"Criticidade: {crit_label}. Contexto: {contexto}. "
+                    f"Micro-passo: {micro}"
                 )
 
             elif acao in ("listar_tarefas", "listar"):
