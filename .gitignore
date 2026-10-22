@@ -44,7 +44,9 @@ launcher_log.txt
 dashboard_log.txt
 *.log
 
-# IDEs e Sistema Operacional
+# Screenshots temporários de testes
+emulator_*.png
+
 .vscode/
 .idea/
 .DS_Store

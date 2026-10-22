@@ -60,9 +60,11 @@ export default function SettingsScreen() {
     setTestingSupervisor(true);
     try {
       const res = await agentApi.getSupervisorStatus();
+      const status8000 = res.app_port_8000?.status || 'offline';
+      const pid8000 = res.app_port_8000?.pid ? ` (PID ${res.app_port_8000.pid})` : '';
       Alert.alert(
         '🛡️ Guardião 8001 Operacional!',
-        `Status: ${res.status}\nBranch Git: ${res.git_branch}\nCommit: ${res.git_commit}\nAgente 8000: ${res.agente_8000_status}\n\nO Guardião está pronto para executar Auto-Atualizações com rollback de 15 segundos.`
+        `Status Guardião: ${res.supervisor_status || 'online'}\nPorta: ${res.supervisor_port || 8001}\nCommit Git: ${res.git_commit || 'ok'}\nAgente Operacional (8000): ${status8000}${pid8000}\n\nO Guardião está pronto para executar Auto-Atualizações com rollback de 15 segundos.`
       );
     } catch (err: any) {
       Alert.alert(
