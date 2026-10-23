@@ -9,6 +9,7 @@ import {
   Switch,
   Alert
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   setApiConfig,
   getApiBaseUrl,
@@ -116,7 +117,8 @@ export default function SettingsScreen() {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#090a0f' }} edges={['top']}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <Text style={styles.eyebrow}>CENTRAL & CONECTIVIDADE</Text>
         <Text style={styles.title}>Ajustes do Agente</Text>
@@ -324,6 +326,7 @@ export default function SettingsScreen() {
         <Text style={styles.systemInfo}>Repositório: github.com/JhokoDev/agent-core</Text>
       </View>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 

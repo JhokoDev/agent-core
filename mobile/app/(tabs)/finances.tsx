@@ -11,6 +11,7 @@ import {
   TextInput,
   Alert
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { agentApi } from '../../src/services/api';
 import {
   DashboardStatus,
@@ -177,11 +178,12 @@ export default function FinancesScreen() {
   const saldoReservaMetas = saldoCaixas?.caixas?.construcao_futuro?.saldo || 0;
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#10b981" />}
-    >
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#090a0f' }} edges={['top']}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#10b981" />}
+      >
       {/* Cabeçalho */}
       <View style={styles.header}>
         <Text style={styles.eyebrow}>CONTROLE DE PATRIMÔNIO · LIFE OS</Text>
@@ -556,6 +558,7 @@ export default function FinancesScreen() {
         </View>
       </Modal>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 

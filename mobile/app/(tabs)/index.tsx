@@ -11,6 +11,7 @@ import {
   TextInput,
   Alert
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import { agentApi } from '../../src/services/api';
 import { DashboardStatus, Tarefa } from '../../src/types';
@@ -288,11 +289,12 @@ export default function CockpitScreen() {
   };
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#6366f1" />}
-    >
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#090a0f' }} edges={['top']}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#6366f1" />}
+      >
       {/* Cabeçalho de Status Diário */}
       <View style={styles.header}>
         <Text style={styles.eyebrow}>COCKPIT DIÁRIO · AGENT CORE</Text>
@@ -672,6 +674,7 @@ export default function CockpitScreen() {
         </View>
       </Modal>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 

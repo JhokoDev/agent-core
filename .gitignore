@@ -46,6 +46,10 @@ dashboard_log.txt
 
 # Screenshots temporários de testes
 emulator_*.png
+test_*.png
+*_fixed.png
+guard_*.png
+tab*.png
 
 .vscode/
 .idea/

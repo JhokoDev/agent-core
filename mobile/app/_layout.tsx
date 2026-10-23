@@ -2,7 +2,16 @@ import { useFonts } from 'expo-font';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
+import { LogBox } from 'react-native';
 import 'react-native-reanimated';
+
+// Silencia avisos informativos não críticos do Expo Go no emulador/dispositivo
+LogBox.ignoreLogs([
+  'expo-notifications',
+  'Push notifications',
+  'Route "./(tabs)/index.tsx" is missing the required default export',
+  'Cannot find native module'
+]);
 
 import { useColorScheme } from '@/components/useColorScheme';
 

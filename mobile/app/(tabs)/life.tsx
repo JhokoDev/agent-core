@@ -9,6 +9,7 @@ import {
   RefreshControl,
   Alert
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { agentApi } from '../../src/services/api';
 import { Meta, Habito } from '../../src/types';
 
@@ -67,11 +68,12 @@ export default function LifeOSScreen() {
   }
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#f59e0b" />}
-    >
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#090a0f' }} edges={['top']}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#f59e0b" />}
+      >
       <View style={styles.header}>
         <Text style={styles.eyebrow}>LIFE OS · METAS & HÁBITOS</Text>
         <Text style={styles.title}>Construção Pessoal</Text>
@@ -140,6 +142,7 @@ export default function LifeOSScreen() {
         ))
       )}
     </ScrollView>
+    </SafeAreaView>
   );
 }
 

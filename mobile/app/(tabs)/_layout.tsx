@@ -1,6 +1,6 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
-import { Text } from 'react-native';
+import { Text, Platform } from 'react-native';
 
 export default function TabLayout() {
   return (
@@ -11,8 +11,8 @@ export default function TabLayout() {
         tabBarStyle: {
           backgroundColor: '#0c0e17',
           borderTopColor: '#1e243d',
-          height: 60,
-          paddingBottom: 8,
+          height: Platform.OS === 'android' ? 68 : 60,
+          paddingBottom: Platform.OS === 'android' ? 12 : 8,
           paddingTop: 6
         },
         headerStyle: {
