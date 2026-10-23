@@ -27,6 +27,12 @@ class ChatService:
 
     def salvar_chat(self, chat: dict) -> None:
         chat["updated_at"] = datetime.now().isoformat()
+        if "titulo" not in chat or not chat["titulo"] or chat["titulo"] == "Novo Chat":
+            for msg in chat.get("messages", []):
+                if msg.get("role") == "user" and msg.get("content"):
+                    raw = msg["content"].strip().replace("\n", " ")
+                    chat["titulo"] = (raw[:38] + "...") if len(raw) > 38 else raw
+                    break
         # CORREÇÃO: Passa os dois argumentos (ID e Dados) exigidos pelo storage.py
         storage.salvar_chat(chat["id"], chat)
 

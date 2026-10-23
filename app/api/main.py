@@ -115,6 +115,13 @@ async def carregar_chat(chat_id: str):
         raise HTTPException(status_code=404, detail="Chat não encontrado.")
     return chat
 
+@app.delete("/chats/{chat_id}", dependencies=[Depends(verificar_token)])
+async def deletar_chat(chat_id: str):
+    sucesso = storage.deletar_chat(chat_id)
+    if not sucesso:
+        raise HTTPException(status_code=404, detail="Chat não encontrado ou falha ao deletar.")
+    return {"sucesso": True, "mensagem": f"Chat {chat_id} deletado com sucesso."}
+
 @app.post("/chat", dependencies=[Depends(verificar_token)])
 async def chat(requisicao: ChatRequest):
     try:

@@ -357,7 +357,8 @@ export const agentApi = {
     texto: string,
     chatId?: string,
     onChunk?: (tokenText: string) => void,
-    provedor?: 'nuvem' | 'local'
+    provedor?: 'nuvem' | 'local',
+    skillId?: string
   ): Promise<{ content: string; chatId: string; model?: string; route?: string; reasoning?: string; provedor?: string }> {
     return new Promise((resolve, reject) => {
       const base = getApiBaseUrl();
@@ -457,11 +458,48 @@ export const agentApi = {
         JSON.stringify({
           texto,
           chat_id: chatId,
-          skill_id: 'default',
+          skill_id: skillId || 'default',
           provedor: provedor || CURRENT_LLM_PROVIDER
         })
       );
     });
+  },
+
+  // 6.1 Histórico de Conversas e Agentes Especialistas
+  async listarChats(): Promise<Array<{ id: string; titulo: string; atualizado_em: number; mensagem_count: number; preview: string }>> {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/chats`, {
+      headers: getHeaders()
+    });
+    if (!res.ok) throw new Error(`Erro ao listar histórico de chats: HTTP ${res.status}`);
+    return await res.json();
+  },
+
+  async carregarChat(chatId: string): Promise<any> {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/chats/${chatId}`, {
+      headers: getHeaders()
+    });
+    if (!res.ok) throw new Error(`Erro ao carregar chat: HTTP ${res.status}`);
+    return await res.json();
+  },
+
+  async deletarChat(chatId: string): Promise<boolean> {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/chats/${chatId}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    });
+    return res.ok;
+  },
+
+  async listarAgentes(): Promise<Array<{ id: string; nome: string; icone?: string; tipo?: string; modelo?: string }>> {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/agentes`, {
+      headers: getHeaders()
+    });
+    if (!res.ok) return [];
+    return await res.json();
   },
 
   // 7. Guardião Supervisor (Porta 8001 - Auto-Atualização Blindada)
