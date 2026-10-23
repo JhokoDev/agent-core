@@ -9,6 +9,28 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
+# Configura codificação de saída para UTF-8 seguro no Windows
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+def log_supervisor(msg: str):
+    """Garante escrita de logs sem falhas de codificação charmap/cp1252 no Windows."""
+    try:
+        print(msg, flush=True)
+    except Exception:
+        try:
+            print(msg.encode("ascii", errors="replace").decode("ascii"), flush=True)
+        except Exception:
+            pass
+
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -82,7 +104,7 @@ def criar_backup_banco() -> str:
         except Exception:
             pass
             
-    print(f"[Supervisor] Backup de segurança gravado em: {pasta_destino}")
+    log_supervisor(f"[Supervisor] Backup de seguranca gravado em: {pasta_destino}")
     return str(pasta_destino)
 
 
@@ -95,7 +117,7 @@ def restaurar_backup_banco(pasta_backup: str) -> bool:
     db_backup = caminho / "life_os.db"
     if db_backup.exists():
         shutil.copy2(db_backup, DATA_DIR / "life_os.db")
-        print(f"[Supervisor] Banco life_os.db restaurado com sucesso a partir de {pasta_backup}")
+        log_supervisor(f"[Supervisor] Banco life_os.db restaurado com sucesso a partir de {pasta_backup}")
         return True
     return False
 
@@ -110,7 +132,7 @@ def obter_pid_porta_8000() -> Optional[int]:
             if pid_str.isdigit() and int(pid_str) > 0:
                 return int(pid_str)
     except Exception as e:
-        print(f"[Supervisor] Aviso ao verificar porta 8000: {e}")
+        log_supervisor(f"[Supervisor] Aviso ao verificar porta 8000: {e}")
     return None
 
 
@@ -118,19 +140,19 @@ def matar_processo_porta_8000() -> bool:
     """Mata forçadamente a árvore de processos na porta 8000 para libertar sockets e ficheiros."""
     pid = obter_pid_porta_8000()
     if pid:
-        print(f"[Supervisor] A finalizar processo antigo PID {pid} na porta 8000...")
+        log_supervisor(f"[Supervisor] A finalizar processo antigo PID {pid} na porta 8000...")
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=5)
             time.sleep(1.5)
             return True
         except Exception as e:
-            print(f"[Supervisor] Erro ao matar PID {pid}: {e}")
+            log_supervisor(f"[Supervisor] Erro ao matar PID {pid}: {e}")
     return False
 
 
 def iniciar_servidor_8000():
     """Inicia o processo operacional FastAPI na porta 8000."""
-    print("[Supervisor] A iniciar servidor operacional na porta 8000...")
+    log_supervisor("[Supervisor] A iniciar servidor operacional na porta 8000...")
     cmd = [sys.executable, "-u", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--env-file", ".env"]
     p = subprocess.Popen(cmd, cwd=str(BASE_DIR))
     return p
@@ -141,18 +163,18 @@ def testar_healthcheck_15s(timeout_segundos: int = 15) -> bool:
     inicio = time.time()
     url = "http://127.0.0.1:8000/api/life/status"
     
-    print(f"[Supervisor] A monitorizar arranque seguro na porta 8000 ({timeout_segundos}s)...")
+    log_supervisor(f"[Supervisor] A monitorizar arranque seguro na porta 8000 ({timeout_segundos}s)...")
     while time.time() - inicio < timeout_segundos:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "AgentCore-Supervisor/1.0"})
             with urllib.request.urlopen(req, timeout=2) as resp:
                 if resp.status == 200:
-                    print(f"[Supervisor] ✅ Healthcheck aprovado em {time.time() - inicio:.1f} segundos!")
+                    log_supervisor(f"[Supervisor] [OK] Healthcheck aprovado em {time.time() - inicio:.1f} segundos!")
                     return True
         except Exception:
             time.sleep(1.0)
             
-    print(f"[Supervisor] ❌ Timeout de {timeout_segundos}s esgotado sem resposta da porta 8000!")
+    log_supervisor(f"[Supervisor] [TIMEOUT] Timeout de {timeout_segundos}s esgotado sem resposta da porta 8000!")
     return False
 
 
@@ -218,7 +240,7 @@ def aprovar_atualizacao_mobile(patch_id: str, token: str = Depends(verificar_tok
     3. Reinício da porta 8000
     4. Janela de salvamento de 15s (Auto-Rollback se falhar)
     """
-    print(f"\n[Supervisor] 🚨 APROVAÇÃO MOBILE RECEBIDA PARA O PATCH: {patch_id}!")
+    log_supervisor(f"\n[Supervisor] [APROVACAO MOBILE] Recebida para o patch: {patch_id}!")
     
     # Passo 1: Backup de segurança
     pasta_backup = criar_backup_banco()
@@ -228,11 +250,11 @@ def aprovar_atualizacao_mobile(patch_id: str, token: str = Depends(verificar_tok
     try:
         merge_res = subprocess.run(["git", "merge", branch_name, "--no-edit"], cwd=str(BASE_DIR), capture_output=True, text=True, timeout=15)
         if merge_res.returncode != 0:
-            print(f"[Supervisor] Erro no git merge: {merge_res.stderr}")
+            log_supervisor(f"[Supervisor] Erro no git merge: {merge_res.stderr}")
             # Se a branch específica não existir, faz checkout pull
             subprocess.run(["git", "pull", "origin", "main"], cwd=str(BASE_DIR), capture_output=True, timeout=15)
     except Exception as e:
-        print(f"[Supervisor] Aviso no merge: {e}")
+        log_supervisor(f"[Supervisor] Aviso no merge: {e}")
         
     # Passo 3: Reinicia servidor na porta 8000
     matar_processo_porta_8000()
@@ -254,6 +276,7 @@ def aprovar_atualizacao_mobile(patch_id: str, token: str = Depends(verificar_tok
             pass
             
         return {
+            "sucesso": True,
             "status": "applied",
             "mensagem": "Atualização aplicada com sucesso! Servidor 8000 online e estável.",
             "backup_criado": pasta_backup,
@@ -261,7 +284,7 @@ def aprovar_atualizacao_mobile(patch_id: str, token: str = Depends(verificar_tok
         }
     else:
         # AUTO-ROLLBACK AUTOMÁTICO DE SEGURANÇA!
-        print("[Supervisor] ⚠️ ACIONANDO AUTO-ROLLBACK IMEDIATO!")
+        log_supervisor("[Supervisor] [ROLLBACK] Acionando auto-rollback imediato!")
         subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=str(BASE_DIR), capture_output=True, timeout=10)
         restaurar_backup_banco(pasta_backup)
         matar_processo_porta_8000()
@@ -269,6 +292,7 @@ def aprovar_atualizacao_mobile(patch_id: str, token: str = Depends(verificar_tok
         testar_healthcheck_15s(timeout_segundos=15)
         
         return {
+            "sucesso": False,
             "status": "rolled_back",
             "mensagem": "O patch causou instabilidade no arranque. O Guardião reverteu o código e restaurou o banco automaticamente sem quebrar o sistema.",
             "backup_restaurado": pasta_backup,
@@ -282,7 +306,7 @@ def disparar_rollback_manual(token: str = Depends(verificar_token_mobile)):
     backups = sorted(list(BACKUPS_DIR.glob("backup_*")), reverse=True)
     ultimo_backup = str(backups[0]) if backups else ""
     
-    print("[Supervisor] ⏪ ROLLBACK MANUAL SOLICITADO PELO CELULAR!")
+    log_supervisor("[Supervisor] [ROLLBACK MANUAL] Solicitado pelo celular!")
     subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=str(BASE_DIR), capture_output=True, timeout=10)
     if ultimo_backup:
         restaurar_backup_banco(ultimo_backup)
@@ -292,6 +316,7 @@ def disparar_rollback_manual(token: str = Depends(verificar_token_mobile)):
     testar_healthcheck_15s(timeout_segundos=15)
     
     return {
+        "sucesso": True,
         "status": "rolled_back",
         "mensagem": "Rollback manual concluído. Versão anterior restaurada.",
         "commit": obter_commit_atual(),
@@ -301,5 +326,5 @@ def disparar_rollback_manual(token: str = Depends(verificar_token_mobile)):
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"[Supervisor] Guardião Imutável a iniciar na porta {SUPERVISOR_PORT}...")
+    log_supervisor(f"[Supervisor] Guardião Imutável a iniciar na porta {SUPERVISOR_PORT}...")
     uvicorn.run(app, host="0.0.0.0", port=SUPERVISOR_PORT)

@@ -503,7 +503,10 @@ export const agentApi = {
         'Authorization': `Bearer ${MOBILE_APPROVAL_TOKEN}`
       }
     });
-    if (!res.ok) throw new Error(`Erro ao aprovar patch: HTTP ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Erro ao aprovar patch: HTTP ${res.status}${errText ? ' - ' + errText : ''}`);
+    }
     return await res.json();
   },
 
@@ -516,7 +519,10 @@ export const agentApi = {
         'Authorization': `Bearer ${MOBILE_APPROVAL_TOKEN}`
       }
     });
-    if (!res.ok) throw new Error(`Erro no rollback: HTTP ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Erro no rollback: HTTP ${res.status}${errText ? ' - ' + errText : ''}`);
+    }
     return await res.json();
   }
 };

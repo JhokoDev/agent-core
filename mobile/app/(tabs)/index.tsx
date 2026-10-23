@@ -110,7 +110,7 @@ export default function CockpitScreen() {
             try {
               setPatchLoading(true);
               const res = await agentApi.approvePatch(patch.patch_id);
-              if (res.sucesso) {
+              if (res.sucesso || res.status === 'applied') {
                 Alert.alert(
                   '🎉 Atualização Concluída!',
                   res.mensagem || 'Agent Core atualizado e operacional na porta 8000.'
